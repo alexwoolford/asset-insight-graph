@@ -1,0 +1,2 @@
+# Cypher generation template for LangChain (placeholder)
+Use the graph schema to answer user questions.

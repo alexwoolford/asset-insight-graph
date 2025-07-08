@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
+  <rect x="10" y="80" width="80" height="40" fill="#cce" />
+  <text x="20" y="105" font-size="12">ETL</text>
+  <rect x="150" y="30" width="100" height="140" fill="#cec" />
+  <text x="170" y="105" font-size="12">Neo4j Aura</text>
+  <rect x="300" y="80" width="80" height="40" fill="#ecc" />
+  <text x="310" y="105" font-size="12">FastAPI</text>
+  <polyline points="90,100 150,100" stroke="#000" fill="none" />
+  <polyline points="250,100 300,100" stroke="#000" fill="none" />
+</svg>

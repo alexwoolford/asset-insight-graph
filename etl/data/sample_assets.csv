@@ -1,0 +1,6 @@
+id,name,city,type,partners
+1,Alpha Tower,New York,Office,"PartnerA;PartnerB"
+2,Beta Plaza,Chicago,Retail,"PartnerA"
+3,Gamma Center,Dallas,Industrial,"PartnerC"
+4,Delta Mall,Chicago,Retail,"PartnerB;PartnerC"
+5,Epsilon Park,San Francisco,Office,"PartnerD"
