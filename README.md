@@ -24,13 +24,18 @@ Asset Insight Graph is a Neo4j‑powered knowledge graph that links real‑estat
 ```
 
 ## Quick Start (Local Dev)
+Docker is optional and may not work in restricted environments.
 ```
 # 1. Clone
 git clone https://github.com/your-org/asset-insight-graph.git
 cd asset-insight-graph
 
-# 2. Spin up Neo4j + API
-docker compose up -d     # default creds: neo4j / neo4j
+# 2. Start Neo4j + API (Docker optional)
+docker compose up -d     # default creds: neo4j / neo4j (may fail in restricted env)
+# or run the API locally (when Docker isn't available):
+poetry run uvicorn api.main:app --reload
+# or via Makefile
+make run-dev
 
 # 3. Ingest sample data
 pip install -r etl/requirements.txt
