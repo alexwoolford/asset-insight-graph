@@ -7,7 +7,7 @@ load:
 	@echo "Running load"
 
 run:
-        @echo "Running run"
+	@echo "Running run"
 
 run-dev:
 	poetry run uvicorn api.main:app --reload
