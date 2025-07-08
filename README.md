@@ -30,7 +30,13 @@ make setup
 make load
 ```
 
-4. Run the API service locally:
+4. Load the CIM Group asset dataset scraped from the web:
+
+```bash
+poetry run python etl/load_cim_dataset.py
+```
+
+5. Run the API service locally:
 
 ```bash
 make run
