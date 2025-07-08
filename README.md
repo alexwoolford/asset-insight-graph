@@ -13,7 +13,9 @@ Asset Insight Graph demonstrates a small knowledge graph backed by Neo4j Aura an
 ├── tests/              # Pytest suites
 ```
 
+
 ## Quick Start
+=======
 
 1. Copy `.env.example` to `.env` and fill in the Neo4j and OpenAI credentials.
 2. Install dependencies and pre-commit hooks:
