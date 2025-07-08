@@ -1,16 +1,12 @@
-.PHONY: setup load run run-dev test
-
 setup:
-	@echo "Running setup"
+poetry install
+pre-commit install
 
 load:
-	@echo "Running load"
+poetry run python etl/load_sample_dataset.py
 
 run:
-	@echo "Running run"
-
-run-dev:
-	poetry run uvicorn api.main:app --reload
+poetry run uvicorn api.main:app --host 0.0.0.0 --port 8000
 
 test:
-	@echo "Running test"
+poetry run pytest -q
