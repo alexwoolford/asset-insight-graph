@@ -33,7 +33,7 @@ make load
 4. Load the CIM Group asset dataset scraped from the web:
 
 ```bash
-poetry run python etl/load_cim_dataset.py
+make load-cim
 ```
 
 5. Run the API service locally:
