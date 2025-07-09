@@ -13,6 +13,7 @@ pydantic-settings>=2.2.0,<3.0.0
 # AI and language processing
 langchain>=0.1.14,<1.0.0
 openai>=1.12.0,<2.0.0
+ps-genai-agents
 
 # Data processing and utilities
 pandas>=2.1.0,<3.0.0
@@ -23,5 +24,4 @@ httpx>=0.28.1,<1.0.0
 # pytest>=7.4.0,<8.0.0
 # pytest-asyncio>=0.23.0,<1.0.0
 # black>=23.9.0,<24.0.0
-# isort>=5.12.0,<6.0.0
-# ruff>=0.1.14,<1.0.0 
+# isort>=5.12.0,<6.0.0# ruff>=0.1.14,<1.0.0 

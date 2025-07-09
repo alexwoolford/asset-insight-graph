@@ -173,9 +173,27 @@ async def answer_geospatial(question: str) -> Dict[str, Any]:
                 "geospatial_enabled": True
             }
 
-    # If no pattern matches and OpenAI is available, use LLM-based approach
+    # If no pattern matches and OpenAI is available, use Text2Cypher workflow
     if os.getenv("OPENAI_API_KEY"):
-        raise NotImplementedError("LLM-based GraphRAG not yet implemented - coming soon!")
+        from .text2cypher import get_text2cypher_workflow
+
+        workflow = get_text2cypher_workflow()
+        cypher = await workflow.run(question)
+
+        driver = get_driver()
+        settings = Settings()
+        async with driver.session(database=settings.neo4j_db) as session:
+            result = await session.run(cypher)
+            data = await result.data()
+
+        return {
+            "answer": f"Executed generated Cypher query.",
+            "cypher": cypher,
+            "data": data,
+            "question": question,
+            "pattern_matched": False,
+            "geospatial_enabled": True,
+        }
     
     # Fallback: suggest what kinds of questions can be answered
     suggestions = [
