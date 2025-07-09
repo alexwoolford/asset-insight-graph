@@ -8,7 +8,7 @@ Asset Insight Graph demonstrates a small knowledge graph backed by Neo4j Aura an
 .
 ├── api/                # FastAPI service
 ├── etl/                # Data loading scripts
-├── docs/               # Diagrams
+├── docs/               # Documentation and diagrams
 ├── tests/              # Pytest suites
 ```
 
