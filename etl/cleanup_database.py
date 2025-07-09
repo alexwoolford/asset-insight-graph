@@ -129,3 +129,4 @@ async def cleanup_database() -> None:
 
 
 if __name__ == "__main__":    asyncio.run(cleanup_database())
+

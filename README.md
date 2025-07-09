@@ -61,6 +61,8 @@ make test
 ```
 
 See `docs/arch.svg` for a high level architecture diagram.
+Details on generating the CIM asset dataset can be found in
+`docs/data_sources.md`.
 
 ## Features
 
