@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .config import Settings
-from .geospatial_tools import get_cypher_statements_dictionary, get_tool_schemas
+from .asset_queries import get_cypher_statements_dictionary, get_tool_schemas
 
 # These imports are optional and loaded inside the workflow function
 

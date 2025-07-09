@@ -7,8 +7,11 @@ Asset Insight Graph demonstrates a small knowledge graph backed by Neo4j Aura an
 ```text
 .
 ├── api/                # FastAPI service
+│   ├── asset_queries/  # Predefined Cypher queries and schemas
+│   └── ...
 ├── etl/                # Data loading scripts
-├── docs/               # Diagrams
+├── workflows/          # Generated workflow diagrams (PNG)
+├── docs/               # Documentation and diagram generation
 ├── tests/              # Pytest suites
 ```
 
@@ -60,7 +63,6 @@ Run the test suite with:
 make test
 ```
 
-See `docs/arch.svg` for a high level architecture diagram.
 Details on generating the CIM asset dataset can be found in
 `docs/data_sources.md`.
 
@@ -73,7 +75,7 @@ using `LangGraph`'s built in helpers. Run:
 python docs/generate_diagram.py
 ```
 
-This creates `docs/multi_tool_workflow.png` showing the tool selection
+This creates `workflows/multi_tool_workflow.png` showing the tool selection
 and summarization steps.
 
 ## Features
@@ -87,15 +89,15 @@ This implementation includes several improvements over basic knowledge graphs:
 - **Spatial Analysis**: Distance-based queries and geographic clustering
 - **🌍 Native Geospatial**: Neo4j Point types with spatial indexing (recommended loader)
 
-### 🤖 Advanced Geospatial GraphRAG
+### 🤖 Advanced Asset Query GraphRAG
 - **Pattern-Based Query Engine**: Handles natural language questions like "assets in California" or "portfolio distribution"
 - **🌍 Spatial Queries**: "nearby assets", "assets within 20km of Los Angeles", "assets in LA area"
 - **Business Analytics**: "real estate assets", "commercial buildings"
 - **Portfolio Analysis**: Investment type distribution, regional analysis
-- **Bounding Box Queries**: Market area analysis with predefined geographic regions
+- **Geographic Queries**: State and region-based asset searches
 
 ### 🚀 Future Enhancements
-See `docs/graph_model_enhancements.md` for a comprehensive plan to add:
+Potential areas for expansion include:
 - Financial data (ROI, valuations, performance metrics)
 - Temporal data (acquisition dates, development timelines)
 - Market data (comparables, pricing trends)
