@@ -236,4 +236,4 @@ async def load_cim_assets() -> None:
     print(f"✅ Successfully loaded {len(assets)} CIM assets!")
 
 
-if __name__ == "__main__":    asyncio.run(load_cim_assets()) 
+if __name__ == "__main__":    asyncio.run(load_cim_assets())
