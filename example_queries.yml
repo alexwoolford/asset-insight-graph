@@ -1,0 +1,24 @@
+queries:
+  - question: assets in California
+    cql: |
+      MATCH (a:Asset)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State {name: "California"})
+      RETURN a.name AS asset_name, c.name AS city,
+             a.building_type AS building_type,
+             a.location.latitude AS latitude,
+             a.location.longitude AS longitude
+  - question: portfolio distribution
+    cql: |
+      MATCH (a:Asset)-[:BELONGS_TO]->(p:Platform),
+            (a)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State)-[:PART_OF]->(r:Region)
+      RETURN p.name AS platform, r.name AS region,
+             count(a) AS asset_count
+      ORDER BY platform, asset_count DESC
+  - question: commercial buildings
+    cql: |
+      MATCH (a:Asset)-[:HAS_TYPE]->(bt:BuildingType)
+      WHERE toLower(bt.name) CONTAINS toLower('commercial')
+      RETURN a.name AS asset_name, bt.name AS building_type
+  - question: how many assets
+    cql: |
+      MATCH (a:Asset)
+      RETURN count(a) AS total_assets
