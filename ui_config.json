@@ -1,0 +1,64 @@
+{
+  "app_title": "Asset Insight Graph",
+  "app_description": "Intelligent Real Estate Portfolio Analysis using Neo4j Knowledge Graphs",
+  "api_base_url": "http://localhost:8000",
+  "example_questions": [
+    "assets in California",
+    "portfolio distribution",
+    "commercial buildings", 
+    "assets within 20km of Los Angeles",
+    "how many assets",
+    "residential properties in Texas",
+    "assets in the west region",
+    "show me all platforms",
+    "assets by building type"
+  ],
+  "features": [
+    "Geographic Queries: States, regions, cities",
+    "Portfolio Analysis: Platform distribution",
+    "Building Types: Commercial, residential", 
+    "Geospatial: Distance-based searches",
+    "Business Intelligence: Asset metrics"
+  ],
+  "workflow_agents": [
+    {
+      "name": "Guardrails",
+      "icon": "🛡️",
+      "description": "Input validation and safety checks"
+    },
+    {
+      "name": "Planner", 
+      "icon": "📋",
+      "description": "Query analysis and strategy determination"
+    },
+    {
+      "name": "Tool Selection",
+      "icon": "🔧", 
+      "description": "Pattern matching for predefined tools"
+    },
+    {
+      "name": "Predefined Cypher",
+      "icon": "💾",
+      "description": "Fast execution of pattern-matched queries"
+    },
+    {
+      "name": "Text2Cypher",
+      "icon": "🤖",
+      "description": "LLM-generated Cypher for complex queries"
+    },
+    {
+      "name": "Summarizer",
+      "icon": "📝",
+      "description": "Natural language response generation"
+    }
+  ],
+  "ui_settings": {
+    "page_icon": "🏢",
+    "layout": "wide",
+    "sidebar_expanded": true,
+    "show_workflow": true,
+    "show_cypher_details": true,
+    "enable_downloads": true,
+    "enable_visualizations": true
+  }
+} 

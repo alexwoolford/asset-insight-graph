@@ -53,4 +53,44 @@ lint: ## Lint code with ruff
 check: ## Run all code quality checks
 	$(MAKE) format
 	$(MAKE) lint
-	$(MAKE) test 
+	$(MAKE) test
+
+ui: ## Start the Streamlit UI interface
+	conda run -n $(CONDA_ENV) --no-capture-output streamlit run streamlit_app.py
+
+ui-demo: ## Start Streamlit UI with helpful info
+	@echo "🚀 Starting Asset Insight Graph UI..."
+	@echo "📊 Connect to your Neo4j database to see live data"
+	@echo "💡 Example questions are provided in the sidebar"
+	@echo "🌐 UI will open in your browser at http://localhost:8501"
+	@echo "⚠️  Remember to start the API with: make run"
+	conda run -n $(CONDA_ENV) --no-capture-output streamlit run streamlit_app.py
+
+demo: ## Start both API and UI for complete demo experience
+	@echo "🚀 Starting complete Asset Insight Graph demo..."
+	@echo "📡 Starting FastAPI backend on http://localhost:8000"
+	@echo "🎨 Starting Streamlit UI on http://localhost:8501"
+	@echo "📊 Connect to your Neo4j database to see live data"
+	@echo ""
+	@echo "💡 Open two terminals and run:"
+	@echo "   Terminal 1: make run      # API backend"
+	@echo "   Terminal 2: make ui       # Streamlit UI"
+	@echo ""
+	@echo "Or use: make start-all  # Starts both in background"
+
+start-all: ## Start both API and UI in background
+	@echo "🚀 Starting Asset Insight Graph (API + UI)..."
+	@echo "📡 FastAPI: http://localhost:8000"
+	@echo "🎨 Streamlit: http://localhost:8501"
+	nohup conda run -n $(CONDA_ENV) uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload > api.log 2>&1 &
+	sleep 3
+	nohup conda run -n $(CONDA_ENV) streamlit run streamlit_app.py --server.port 8501 > ui.log 2>&1 &
+	@echo "✅ Both services started in background"
+	@echo "📋 Check logs: tail -f api.log ui.log"
+	@echo "🛑 Stop with: make stop-all"
+
+stop-all: ## Stop all background services
+	@echo "🛑 Stopping all services..."
+	-pkill -f "uvicorn api.main:app"
+	-pkill -f "streamlit run streamlit_app.py"
+	@echo "✅ All services stopped" 

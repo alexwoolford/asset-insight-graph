@@ -66,10 +66,44 @@ make test
 Details on generating the CIM asset dataset can be found in
 `docs/data_sources.md`.
 
-## Workflow Diagrams
+## 🎨 User Interface
 
-To visualize the multi-agent workflow you can generate a Mermaid diagram
-using `LangGraph`'s built in helpers. Run:
+### Streamlit Web UI
+
+For a user-friendly experience similar to ps-genai-agents, use the Streamlit interface:
+
+**Option 1: Auto-start everything (Recommended)**
+```bash
+# Start both API and UI automatically
+make start-all
+```
+
+**Option 2: Manual control (2 terminals)**
+```bash
+# Terminal 1: Start API backend
+make run
+
+# Terminal 2: Start UI frontend  
+make ui-demo
+```
+
+**Option 3: Step-by-step guidance**
+```bash
+# Get instructions for complete setup
+make demo
+```
+
+The UI provides:
+- 💬 **Chat Interface**: Natural language queries with conversation history
+- 🔄 **Workflow Visualization**: See which agents process your questions
+- 📊 **Data Visualizations**: Automatic charts for portfolio and geographic data
+- 🔍 **Cypher Details**: Expandable sections showing generated queries
+- 📥 **Data Export**: Download query results as CSV files
+- 🎯 **Example Questions**: Click-to-try sample queries in the sidebar
+
+### Workflow Diagrams
+
+To visualize the multi-agent workflow you can generate a Mermaid diagram:
 
 ```bash
 python docs/generate_diagram.py
@@ -104,9 +138,30 @@ Potential areas for expansion include:
 - ESG metrics (sustainability scores, green certifications)
 - Risk assessment (climate risk, market volatility)
 
-## API Usage Examples
+## 🚀 Usage Examples
 
-Query the knowledge graph using natural language:
+### Web Interface (Recommended)
+
+The easiest way to interact with the system is through the Streamlit web UI:
+
+```bash
+# Start complete demo (API + UI)
+make start-all
+
+# Or get step-by-step instructions
+make demo
+```
+
+Try these example questions in the web interface:
+- "assets in California"
+- "portfolio distribution" 
+- "assets within 20km of Los Angeles"
+- "commercial buildings"
+- "how many assets"
+
+### API Usage (Advanced)
+
+You can also query the knowledge graph directly via API:
 
 ```bash
 # Geographic queries
@@ -114,7 +169,6 @@ curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"
 
 # Geospatial queries
 curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "assets within 20km of Los Angeles"}'
-curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "assets in LA area"}'
 
 # Portfolio analysis  
 curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "portfolio distribution"}'
