@@ -13,7 +13,6 @@ pydantic-settings>=2.2.0,<3.0.0
 # AI and language processing
 langchain>=0.1.14,<1.0.0
 openai>=1.12.0,<2.0.0
-ps-genai-agents
 
 # Data processing and utilities
 pandas>=2.1.0,<3.0.0
