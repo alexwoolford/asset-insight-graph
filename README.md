@@ -64,6 +64,18 @@ See `docs/arch.svg` for a high level architecture diagram.
 Details on generating the CIM asset dataset can be found in
 `docs/data_sources.md`.
 
+## Workflow Diagrams
+
+To visualize the multi-agent workflow you can generate a Mermaid diagram
+using `LangGraph`'s built in helpers. Run:
+
+```bash
+python docs/generate_diagram.py
+```
+
+This creates `docs/multi_tool_workflow.png` showing the tool selection
+and summarization steps.
+
 ## Features
 
 This implementation includes several improvements over basic knowledge graphs:
