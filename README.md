@@ -8,36 +8,41 @@ Asset Insight Graph demonstrates a small knowledge graph backed by Neo4j Aura an
 .
 ├── api/                # FastAPI service
 ├── etl/                # Data loading scripts
-├── docker/             # Dockerfile for the API
 ├── docs/               # Diagrams
 ├── tests/              # Pytest suites
 ```
 
 
-## Quick Start
+## 🚀 Quick Start
 
-1. Copy `.env.example` to `.env` and fill in the Neo4j and OpenAI credentials.
-2. Install dependencies and pre-commit hooks:
+### 🐍 Clean Conda Environment (Recommended)
+
+For a clean, reproducible setup using conda:
 
 ```bash
+# Create and setup the CIM conda environment
 make setup
+
+# Activate the environment  
+conda activate cim
+
+# Configure credentials (copy .env.example to .env)
+cp .env.example .env
+# Edit .env with your Neo4j and OpenAI credentials
 ```
 
-3. Load the sample dataset to Neo4j Aura:
+📖 **See [SETUP.md](SETUP.md) for complete setup instructions and troubleshooting.**
+
+### 📊 Load Data and Start API
 
 ```bash
+# Load CIM asset data with native geospatial Point types
 make load
-```
 
-4. Load the CIM Group asset dataset scraped from the web:
+# Verify the knowledge graph
+make verify
 
-```bash
-make load-cim
-```
-
-5. Run the API service locally:
-
-```bash
+# Start the API service
 make run
 ```
 
@@ -56,3 +61,48 @@ make test
 ```
 
 See `docs/arch.svg` for a high level architecture diagram.
+
+## Enhanced Features
+
+This implementation includes several improvements over basic knowledge graphs:
+
+### 🏗️ Enhanced Knowledge Graph
+- **Real CIM Asset Data**: 12 actual CIM Group properties (no synthetic data)
+- **Geographic Hierarchy**: Asset → City → State → Region with geocoded coordinates
+- **Business Intelligence**: Platform, BuildingType, and InvestmentType classifications
+- **Spatial Analysis**: Distance-based queries and geographic clustering
+- **🌍 Native Geospatial**: Neo4j Point types with spatial indexing (recommended loader)
+
+### 🤖 Advanced Geospatial GraphRAG
+- **Pattern-Based Query Engine**: Handles natural language questions like "assets in California" or "portfolio distribution"
+- **🌍 Enhanced Spatial Queries**: "nearby assets", "assets within 20km of Los Angeles", "assets in LA area"
+- **Business Analytics**: "real estate assets", "commercial buildings"
+- **Portfolio Analysis**: Investment type distribution, regional analysis
+- **Bounding Box Queries**: Market area analysis with predefined geographic regions
+
+### 🚀 Future Enhancements
+See `docs/graph_model_enhancements.md` for a comprehensive plan to add:
+- Financial data (ROI, valuations, performance metrics)
+- Temporal data (acquisition dates, development timelines)
+- Market data (comparables, pricing trends)
+- ESG metrics (sustainability scores, green certifications)
+- Risk assessment (climate risk, market volatility)
+
+## API Usage Examples
+
+Query the knowledge graph using natural language:
+
+```bash
+# Geographic queries
+curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "assets in California"}'
+
+# Enhanced geospatial queries
+curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "assets within 20km of Los Angeles"}'
+curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "assets in LA area"}'
+
+# Portfolio analysis  
+curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "portfolio distribution"}'
+
+# Building type analysis
+curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "commercial buildings"}'
+```

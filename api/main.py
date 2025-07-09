@@ -28,6 +28,6 @@ class QARequest(BaseModel):
 async def qa(req: QARequest) -> dict[str, object]:
     """Answer a natural language question using the graph."""
     try:
-        return await graphrag.answer(req.question)
+        return await graphrag.answer_geospatial(req.question)
     except NotImplementedError as exc:
         raise HTTPException(status_code=501, detail=str(exc))
