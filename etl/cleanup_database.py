@@ -124,7 +124,7 @@ async def cleanup_database() -> None:
     print("\n" + "="*60)
     print("✅ Database cleanup complete!")
     print("📋 Next steps:")
-    print("   1. Load enhanced data: make load")
+    print("   1. Load data: make load")
     print("   2. Verify loading: make verify")
 
 

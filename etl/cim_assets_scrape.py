@@ -1,9 +1,9 @@
 import re, json, requests
 from bs4 import BeautifulSoup
 
-def scrape_cim_assets_enhanced():
+def scrape_cim_assets():
     """
-    Enhanced version of the original CIM scraper with detailed debugging
+    CIM scraper with detailed debugging
     """
     URL = "https://www.cimgroup.com/our-platforms/assets"
     HEADS = {"User-Agent": "Mozilla/5.0 (compatible; AssetScraper/1.0)"}
@@ -166,7 +166,7 @@ def extract_info_from_filename(filename):
     
     return info
 
-def save_enhanced_results(assets):
+def save_results(assets):
     """
     Save results as JSONL (JSON Lines) format
     """
@@ -203,11 +203,11 @@ def save_enhanced_results(assets):
     return clean_assets
 
 if __name__ == "__main__":
-    print("Enhanced CIM Group Asset Scraper")
+    print("CIM Group Asset Scraper")
     print("="*40)
     
-    assets = scrape_cim_assets_enhanced()
-    clean_assets = save_enhanced_results(assets)
+    assets = scrape_cim_assets()
+    clean_assets = save_results(assets)
     
     print(f"\n🎉 Success! Found {len(assets)} total asset records.")
     

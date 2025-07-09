@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Enhanced CIM loader with Neo4j native geospatial Point data types
+CIM loader with Neo4j native geospatial Point data types
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def read_assets() -> list[dict[str, Any]]:
 async def geocode_location(city: str, state: str) -> dict[str, Any]:
     """
     Geocode a city, state location using OpenStreetMap Nominatim API.
-    Returns dict with geospatial data optimized for Neo4j Point types.
+    Returns dict with geospatial data for Neo4j Point types.
     """
     if not city or not state:
         return {}
@@ -119,11 +119,12 @@ def get_us_region(state: str) -> str:
 
 
 def extract_asset_characteristics(asset: dict) -> dict[str, Any]:
-    """Extract additional characteristics from asset data."""
+    """Extract characteristics from asset data."""
     characteristics = {}
+    name = asset.get("name", "").lower()
+    platform = asset.get("platform", "")
     
     # Asset type inference from name
-    name = asset.get("name", "").lower()
     if any(word in name for word in ["tower", "building", "center", "plaza"]):
         characteristics["building_type"] = "Commercial"
     elif any(word in name for word in ["apartments", "residence", "homes"]):
@@ -137,8 +138,7 @@ def extract_asset_characteristics(asset: dict) -> dict[str, Any]:
     else:
         characteristics["building_type"] = "Mixed Use"
     
-    # Platform refinement
-    platform = asset.get("platform", "")
+    # Platform-based investment type
     if platform == "Real Estate":
         characteristics["investment_type"] = "Direct Real Estate"
     elif platform == "Infrastructure":
@@ -149,7 +149,10 @@ def extract_asset_characteristics(asset: dict) -> dict[str, Any]:
     return characteristics
 
 
-async def load_geospatial_enhanced() -> None:
+
+
+
+async def load_cim_assets() -> None:
     """Load CIM assets with Neo4j native geospatial Point data types."""
     if not all([NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD]):
         raise EnvironmentError("Missing Neo4j connection settings")
@@ -170,7 +173,7 @@ async def load_geospatial_enhanced() -> None:
             # Extract additional characteristics
             characteristics = extract_asset_characteristics(asset)
             
-            # Enhanced asset creation with native geospatial Point types
+            # Asset creation with geospatial Point data
             cypher = """
             MERGE (a:Asset {id: $id}) 
             SET a.name = $name,
@@ -230,8 +233,8 @@ async def load_geospatial_enhanced() -> None:
                 await asyncio.sleep(1)
     
     await driver.close()
-    print(f"✅ Successfully loaded {len(assets)} geospatially enhanced CIM assets!")
+    print(f"✅ Successfully loaded {len(assets)} CIM assets!")
 
 
 if __name__ == "__main__":
-    asyncio.run(load_geospatial_enhanced()) 
+    asyncio.run(load_cim_assets()) 

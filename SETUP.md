@@ -106,7 +106,7 @@ curl -X POST http://localhost:8000/qa \
   -H 'Content-Type: application/json' \
   -d '{"question": "assets in California"}'
 
-# Enhanced geospatial queries
+# Geospatial queries
 curl -X POST http://localhost:8000/qa \
   -H 'Content-Type: application/json' \
   -d '{"question": "assets within 20km of Los Angeles"}'
@@ -209,7 +209,7 @@ make setup
 asset-insight-graph/
 ├── api/                    # FastAPI application
 │   ├── main.py            # API entry point
-│   ├── graphrag.py        # Enhanced geospatial GraphRAG
+│   ├── graphrag.py        # Geospatial GraphRAG
 │   └── config.py          # Configuration
 ├── etl/                   # Data loading and processing
 │   ├── cim_loader.py            # Geospatial Point type loader

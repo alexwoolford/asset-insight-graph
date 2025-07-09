@@ -6,9 +6,11 @@ from typing import Any, Dict, List
 
 from .config import Settings, get_driver
 
-# Enhanced query patterns using Neo4j native geospatial Point types
+# Query patterns using Neo4j native geospatial Point types
 # NOTE: Order matters! More specific patterns should come first
 GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
+    
+
     
     # California specific (most specific geographic query)
     (
@@ -72,7 +74,7 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
            ORDER BY platform, asset_count DESC""",
     ),
     
-    # Enhanced geospatial queries using native Point types
+    # Geospatial queries using native Point types
     (
         re.compile(r"assets within (?P<distance>\d+)\s*(?P<unit>km|miles?) of (?P<reference>.+)", re.I),
         """MATCH (ref:Asset)-[:LOCATED_IN]->(refCity:City)
@@ -147,7 +149,7 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
 
 
 async def answer_geospatial(question: str) -> Dict[str, Any]:
-    """Return answer dictionary using enhanced geospatial patterns with Neo4j Point types."""
+    """Return answer dictionary using geospatial patterns with Neo4j Point types."""
     # Try pattern matching first
     for pattern, cypher in GEOSPATIAL_RULES:
         match = pattern.search(question)
@@ -168,7 +170,7 @@ async def answer_geospatial(question: str) -> Dict[str, Any]:
                 "data": data,
                 "question": question,
                 "pattern_matched": True,
-                "geospatial_enhanced": True
+                "geospatial_enabled": True
             }
 
     # If no pattern matches and OpenAI is available, use LLM-based approach
@@ -179,6 +181,8 @@ async def answer_geospatial(question: str) -> Dict[str, Any]:
     suggestions = [
         "Assets in California",
         "Real estate assets", 
+        "Infrastructure assets",
+        "Credit assets",
         "Assets in Texas state",
         "Assets in the west",
         "Portfolio distribution",
@@ -195,7 +199,7 @@ async def answer_geospatial(question: str) -> Dict[str, Any]:
         "data": [],
         "question": question,
         "pattern_matched": False,
-        "geospatial_enhanced": False,
+        "geospatial_enabled": False,
         "suggestions": suggestions
     }
 

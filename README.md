@@ -62,11 +62,11 @@ make test
 
 See `docs/arch.svg` for a high level architecture diagram.
 
-## Enhanced Features
+## Features
 
 This implementation includes several improvements over basic knowledge graphs:
 
-### 🏗️ Enhanced Knowledge Graph
+### 🏗️ Knowledge Graph
 - **Real CIM Asset Data**: 12 actual CIM Group properties (no synthetic data)
 - **Geographic Hierarchy**: Asset → City → State → Region with geocoded coordinates
 - **Business Intelligence**: Platform, BuildingType, and InvestmentType classifications
@@ -75,7 +75,7 @@ This implementation includes several improvements over basic knowledge graphs:
 
 ### 🤖 Advanced Geospatial GraphRAG
 - **Pattern-Based Query Engine**: Handles natural language questions like "assets in California" or "portfolio distribution"
-- **🌍 Enhanced Spatial Queries**: "nearby assets", "assets within 20km of Los Angeles", "assets in LA area"
+- **🌍 Spatial Queries**: "nearby assets", "assets within 20km of Los Angeles", "assets in LA area"
 - **Business Analytics**: "real estate assets", "commercial buildings"
 - **Portfolio Analysis**: Investment type distribution, regional analysis
 - **Bounding Box Queries**: Market area analysis with predefined geographic regions
@@ -96,7 +96,7 @@ Query the knowledge graph using natural language:
 # Geographic queries
 curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "assets in California"}'
 
-# Enhanced geospatial queries
+# Geospatial queries
 curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "assets within 20km of Los Angeles"}'
 curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "assets in LA area"}'
 
