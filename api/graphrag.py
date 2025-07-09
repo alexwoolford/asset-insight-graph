@@ -5,6 +5,7 @@ import re
 from typing import Any, Dict, List
 
 from .config import Settings, get_driver
+from .multi_agent import get_multi_agent_workflow
 
 # Query patterns using Neo4j native geospatial Point types
 # NOTE: Order matters! More specific patterns should come first
@@ -173,26 +174,26 @@ async def answer_geospatial(question: str) -> Dict[str, Any]:
                 "geospatial_enabled": True
             }
 
-    # If no pattern matches and OpenAI is available, use Text2Cypher workflow
+    # If no pattern matches and OpenAI is available, use the multi-agent workflow
     if os.getenv("OPENAI_API_KEY"):
-        from .text2cypher import get_text2cypher_workflow
+        workflow = get_multi_agent_workflow()
+        result = await workflow.ainvoke({"question": question, "data": [], "history": []})
 
-        workflow = get_text2cypher_workflow()
-        cypher = await workflow.run(question)
-
-        driver = get_driver()
-        settings = Settings()
-        async with driver.session(database=settings.neo4j_db) as session:
-            result = await session.run(cypher)
-            data = await result.data()
+        cypher = None
+        data = []
+        if result.get("cyphers"):
+            cypher = result["cyphers"][0].get("statement")
+            data = result["cyphers"][0].get("records", [])
 
         return {
-            "answer": f"Executed generated Cypher query.",
+            "answer": result.get("answer", ""),
             "cypher": cypher,
             "data": data,
             "question": question,
             "pattern_matched": False,
             "geospatial_enabled": True,
+            "steps": result.get("steps"),
+            "visualizations": result.get("visualizations"),
         }
     
     # Fallback: suggest what kinds of questions can be answered
