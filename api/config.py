@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
-from neo4j import AsyncGraphDatabase
+from neo4j import AsyncGraphDatabase, AsyncDriver
 from pydantic_settings import BaseSettings
 
 
@@ -17,7 +17,21 @@ class Settings(BaseSettings):
 
 
 @lru_cache
-def get_driver() -> AsyncGraphDatabase:
+def get_driver() -> AsyncDriver:
     """Return a cached Neo4j driver instance."""
     s = Settings()
-    return AsyncGraphDatabase.driver(s.neo4j_uri, auth=(s.neo4j_user, s.neo4j_pwd))
+    if not all([s.neo4j_uri, s.neo4j_user, s.neo4j_pwd]):
+        missing = []
+        if not s.neo4j_uri:
+            missing.append("NEO4J_URI")
+        if not s.neo4j_user:
+            missing.append("NEO4J_USERNAME")
+        if not s.neo4j_pwd:
+            missing.append("NEO4J_PASSWORD")
+        raise EnvironmentError(
+            f"Missing Neo4j connection settings: {', '.join(missing)}"
+        )
+
+    return AsyncGraphDatabase.driver(
+        s.neo4j_uri, auth=(s.neo4j_user, s.neo4j_pwd)
+    )
