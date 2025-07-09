@@ -36,4 +36,19 @@ CREATE INDEX city_name IF NOT EXISTS FOR (c:City) ON (c.name);
 CREATE INDEX state_name IF NOT EXISTS FOR (s:State) ON (s.name);
 CREATE INDEX region_name IF NOT EXISTS FOR (r:Region) ON (r.name);
 
+// =========================
+// VECTOR INDEXES FOR SEMANTIC SEARCH
+// =========================
+
+// Vector index for property description embeddings (semantic similarity search)
+CREATE VECTOR INDEX asset_description_vector IF NOT EXISTS
+FOR (a:Asset)
+ON a.description_embedding
+OPTIONS {
+    indexConfig: {
+        `vector.dimensions`: 1536,
+        `vector.similarity_function`: 'cosine'
+    }
+};
+
  

@@ -4,8 +4,9 @@ import os
 import re
 from typing import Any, Dict, List
 
+import openai
+
 from .config import Settings, get_driver
-from .multi_agent import get_multi_agent_workflow
 
 # Query patterns using Neo4j native geospatial Point types
 # NOTE: Order matters! More specific patterns should come first
@@ -55,7 +56,20 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
            WHERE toLower(it.name) = toLower($investment_type)
            RETURN a.name AS asset_name, it.name AS investment_type""",
     ),
-    # Building type analysis
+    # Combined building type and state queries (more specific)
+    (
+        re.compile(
+            r"(?P<building_type>commercial|residential|infrastructure|mixed use)\s+(?:buildings?|properties?)\s+in\s+(?P<state>.+?)(?:\s+state)?$",
+            re.I,
+        ),
+        """MATCH (a:Asset)-[:HAS_TYPE]->(bt:BuildingType), 
+                 (a)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State)
+           WHERE toLower(bt.name) CONTAINS toLower($building_type)
+             AND (toLower(s.name) = toLower($state) OR toLower($state) = 'texas' AND s.name = 'Texas')
+           RETURN a.name AS asset_name, c.name AS city, 
+                  bt.name AS building_type, s.name AS state""",
+    ),
+    # Building type analysis (general)
     (
         re.compile(
             r"(?P<building_type>commercial|residential|infrastructure|mixed use) buildings?",
@@ -140,6 +154,24 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
            RETURN count(DISTINCT c) AS cities, count(DISTINCT s) AS states, 
                   count(DISTINCT r) AS regions, count(DISTINCT p) AS platforms""",
     ),
+    # Vector similarity search patterns
+    (
+        re.compile(r"similar to|like|comparable to|properties matching|assets like", re.I),
+        "VECTOR_SEARCH",  # Special marker for vector search
+    ),
+    (
+        re.compile(r"(?:find|show|search|looking for).*(?:with|having|featuring).*(?:luxury|premium|high-quality|modern|sustainable|ESG|green|tech|innovation)", re.I),
+        "VECTOR_SEARCH",
+    ),
+    (
+        re.compile(r"(?:sustainable|ESG|environmental|green|renewable|clean energy|carbon|climate)", re.I),
+        "VECTOR_SEARCH",
+    ),
+    (
+        re.compile(r"(?:luxury|premium|high-end|institutional|quality|amenities|modern)", re.I),
+        "VECTOR_SEARCH",
+    ),
+    
     # City queries (most general, comes last)
     (
         re.compile(r"assets in (?P<city>.+)", re.I),
@@ -150,37 +182,100 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
 ]
 
 
-async def answer_geospatial(question: str) -> Dict[str, Any]:
-    """Return answer dictionary using geospatial patterns or the multi-agent workflow."""
-
-    if os.getenv("OPENAI_API_KEY"):
-        workflow = get_multi_agent_workflow()
-        result = await workflow.ainvoke(
-            {"question": question, "data": [], "history": []}
-        )
-
-        cypher = None
-        data = []
-        if result.get("cyphers"):
-            cypher = result["cyphers"][0].get("statement")
-            data = result["cyphers"][0].get("records", [])
-
+async def perform_vector_search(question: str, limit: int = 5) -> Dict[str, Any]:
+    """Perform vector similarity search for semantic queries."""
+    
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
         return {
-            "answer": result.get("answer", ""),
-            "cypher": cypher,
-            "data": data,
+            "answer": "Vector search requires OpenAI API key to be configured.",
+            "cypher": None,
+            "data": [],
             "question": question,
             "pattern_matched": False,
-            "geospatial_enabled": True,
-            "steps": result.get("steps"),
-            "visualizations": result.get("visualizations"),
+            "vector_search": False,
+        }
+    
+    try:
+        # Initialize OpenAI client
+        client = openai.OpenAI(api_key=openai_key)
+        
+        # Generate embedding for the query
+        response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=question.replace("\n", " "),
+            encoding_format="float"
+        )
+        query_embedding = response.data[0].embedding
+        
+        # Perform vector similarity search
+        vector_cypher = """
+        CALL db.index.vector.queryNodes('asset_description_vector', $limit, $query_embedding)
+        YIELD node, score
+        RETURN node.name AS asset_name,
+               node.city AS city,
+               node.state AS state,
+               node.platform AS platform,
+               node.building_type AS building_type,
+               node.investment_themes AS investment_themes,
+               score AS similarity_score,
+               node.property_description AS description
+        ORDER BY score DESC
+        """
+        
+        # Execute vector search
+        driver = get_driver()
+        settings = Settings()
+        async with driver.session(database=settings.neo4j_db) as session:
+            result = await session.run(vector_cypher, {
+                "query_embedding": query_embedding,
+                "limit": limit
+            })
+            data = await result.data()
+        
+        # Generate summary
+        if data:
+            top_matches = [f"{item['asset_name']} (similarity: {item['similarity_score']:.3f})" 
+                          for item in data[:3]]
+            summary = f"Found {len(data)} semantically similar assets: {', '.join(top_matches)}"
+        else:
+            summary = "No semantically similar assets found."
+        
+        return {
+            "answer": summary,
+            "cypher": vector_cypher,
+            "data": data,
+            "question": question,
+            "pattern_matched": True,
+            "vector_search": True,
+            "search_type": "semantic_similarity"
+        }
+        
+    except Exception as e:
+        return {
+            "answer": f"Vector search error: {str(e)}",
+            "cypher": None,
+            "data": [],
+            "question": question,
+            "pattern_matched": False,
+            "vector_search": False,
         }
 
-    # Fallback to local pattern matching when no LLM key is provided
+
+async def answer_geospatial(question: str) -> Dict[str, Any]:
+    """Return answer dictionary using geospatial patterns and vector search."""
+
+    # Use pattern matching for all queries
     for pattern, cypher in GEOSPATIAL_RULES:
         match = pattern.search(question)
         if match:
             params = match.groupdict()
+            
+            # Check if this is a vector search pattern
+            if cypher == "VECTOR_SEARCH":
+                return await perform_vector_search(question)
+            
+            # Regular graph query
             driver = get_driver()
             settings = Settings()
             async with driver.session(database=settings.neo4j_db) as session:
@@ -212,6 +307,8 @@ async def answer_geospatial(question: str) -> Dict[str, Any]:
         "Assets within 50km of Los Angeles",
         "Assets in LA area",
         "How many assets",
+        "Sustainable renewable energy projects",
+        "Luxury urban development",
     ]
 
     return {
@@ -276,4 +373,5 @@ def generate_geospatial_summary(question: str, data: List[Dict], cypher: str) ->
     asset_names = [item.get("asset_name", "Unknown") for item in data[:5]]
     if result_count <= 5:
         return f"Found {result_count} assets: {', '.join(asset_names)}"
-    else:        return f"Found {result_count} assets including: {', '.join(asset_names)} and {result_count - 5} more"
+    else:
+        return f"Found {result_count} assets including: {', '.join(asset_names)} and {result_count - 5} more"

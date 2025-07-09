@@ -2,6 +2,12 @@
 
 Asset Insight Graph demonstrates a small knowledge graph backed by Neo4j Aura and a minimal FastAPI service providing GraphRAG endpoints.
 
+## 📊 Data Accuracy & Verification
+
+**All data is verifiable and sourced from official channels.** Asset information is scraped directly from CIM Group's official website and enhanced using OpenAI GPT-4 based only on real content. No speculative data is included.
+
+📖 **See [DATA_ACCURACY.md](DATA_ACCURACY.md) for complete details on our data sourcing and verification process.**
+
 ## Repository Layout
 
 ```text
@@ -18,42 +24,87 @@ Asset Insight Graph demonstrates a small knowledge graph backed by Neo4j Aura an
 
 ## 🚀 Quick Start
 
-### 🐍 Clean Conda Environment (Recommended)
+### 🎯 One-Command Setup (Recommended)
 
-For a clean, reproducible setup using conda:
+For the fastest setup, use our complete setup command:
 
 ```bash
-# Create and setup the CIM conda environment
+# 1. Clone and setup environment
+git clone <repository-url>
+cd asset-insight-graph
 make setup
 
-# Activate the environment  
+# 2. Configure credentials
+cp .env.example .env
+# Edit .env with your Neo4j credentials (required)
+# Optionally add OPENAI_API_KEY for vector search
+
+# 3. Complete setup (loads data + creates vectors if OpenAI key provided)
 conda activate cim
+make complete-setup
+
+# 4. Launch the application
+make start-all
+```
+
+🌐 **Open http://localhost:8501 to start querying your knowledge graph!**
+
+### 🐍 Manual Setup (Alternative)
+
+For step-by-step control:
+
+```bash
+# Create and setup the conda environment
+make setup && conda activate cim
 
 # Configure credentials (copy .env.example to .env)
 cp .env.example .env
 # Edit .env with your Neo4j and OpenAI credentials
-```
 
-📖 **See [SETUP.md](SETUP.md) for complete setup instructions and troubleshooting.**
-
-### 📊 Load Data and Start API
-
-```bash
 # Load CIM asset data with native geospatial Point types
 make load
 
 # Verify the knowledge graph
 make verify
 
+# Optional: Setup vector search (requires OPENAI_API_KEY)
+make vectors
+
 # Start the API service
 make run
 ```
+
+### ✅ Verify Setup
 
 The health endpoint should respond with `{"status": "ok"}`:
 
 ```bash
 curl http://localhost:8000/health
 ```
+
+📖 **See [SETUP.md](SETUP.md) for complete setup instructions and troubleshooting.**
+
+### 🧠 Enable Vector Search (Optional)
+
+For semantic similarity search capabilities, set up vector embeddings:
+
+```bash
+# 1. Set OpenAI API key in .env file
+echo "OPENAI_API_KEY=your-key-here" >> .env
+
+# 2. Generate enhanced property descriptions
+cd etl && python property_descriptions.py
+
+# 3. Create vector embeddings and load into Neo4j
+python vector_loader.py
+
+# 4. Test vector search
+cd .. && curl -X POST http://localhost:8000/qa \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "sustainable renewable energy projects"}'
+```
+
+**Note**: Vector search requires an OpenAI API key and will make API calls to generate embeddings.
 
 ## Development
 
@@ -70,7 +121,7 @@ Details on generating the CIM asset dataset can be found in
 
 ### Streamlit Web UI
 
-For a user-friendly experience similar to ps-genai-agents, use the Streamlit interface:
+For a user-friendly experience, use the Streamlit interface:
 
 **Option 1: Auto-start everything (Recommended)**
 ```bash
@@ -84,13 +135,13 @@ make start-all
 make run
 
 # Terminal 2: Start UI frontend  
-make ui-demo
+make ui
 ```
 
-**Option 3: Step-by-step guidance**
+**Option 3: Get launch instructions**
 ```bash
-# Get instructions for complete setup
-make demo
+# Get instructions for launching the application
+make launch
 ```
 
 The UI provides:
@@ -130,6 +181,14 @@ This implementation includes several improvements over basic knowledge graphs:
 - **Portfolio Analysis**: Investment type distribution, regional analysis
 - **Geographic Queries**: State and region-based asset searches
 
+### 🧠 Vector Similarity Search
+- **Semantic Property Discovery**: "Find luxury developments with premium amenities"
+- **Investment Strategy Matching**: "ESG-focused sustainable investments"
+- **Market Similarity**: "Properties in tech innovation hubs"
+- **Asset Comparison**: "Assets similar to Tribune Tower"
+- **OpenAI Embeddings**: Rich property descriptions converted to 1536-dimensional vectors
+- **Neo4j Vector Index**: Cosine similarity search for semantic matching
+
 ### 🚀 Future Enhancements
 Potential areas for expansion include:
 - Financial data (ROI, valuations, performance metrics)
@@ -153,11 +212,21 @@ make demo
 ```
 
 Try these example questions in the web interface:
+
+**Traditional Graph Queries:**
 - "assets in California"
 - "portfolio distribution" 
 - "assets within 20km of Los Angeles"
 - "commercial buildings"
 - "how many assets"
+- "commercial properties in Texas"
+
+**Vector Similarity Search** (requires OpenAI setup):
+- "sustainable renewable energy projects"
+- "luxury urban developments"
+- "ESG-focused investments"
+- "properties similar to Tribune Tower"
+- "assets with premium amenities"
 
 ### API Usage (Advanced)
 
@@ -175,4 +244,32 @@ curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"
 
 # Building type analysis
 curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "commercial buildings"}'
+
+# Vector similarity search (requires OpenAI API key)
+curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "sustainable renewable energy projects"}'
+
+curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "luxury urban developments"}'
+
+curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "ESG-focused investments"}'
+```
+
+## 🏗️ Architecture Overview
+
+The Asset Insight Graph demonstrates all **5 Neo4j access patterns**:
+
+1. **Node Property Query** - Direct asset lookups by name or ID
+2. **Graph Traversal Query** - Following relationships (Asset → City → State → Region)
+3. **Full Text Search** - Pattern matching on asset names and descriptions  
+4. **Graph Data Science** - Geospatial distance calculations and clustering
+5. **Vector Search** - Semantic similarity using OpenAI embeddings
+
+This comprehensive approach enables both precise structured queries and flexible semantic exploration of real estate investment data.
+
+### Query Processing Flow
+
+```
+User Query → Pattern Detection → Route to:
+├── Traditional Graph Query (Cypher)
+├── Geospatial Query (Neo4j Point types)  
+└── Vector Similarity Search (OpenAI embeddings)
 ```

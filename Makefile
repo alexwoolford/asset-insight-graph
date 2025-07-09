@@ -58,23 +58,87 @@ check: ## Run all code quality checks
 ui: ## Start the Streamlit UI interface
 	conda run -n $(CONDA_ENV) --no-capture-output streamlit run streamlit_app.py
 
-ui-demo: ## Start Streamlit UI with helpful info
-	@echo "🚀 Starting Asset Insight Graph UI..."
-	@echo "📊 Connect to your Neo4j database to see live data"
-	@echo "💡 Example questions are provided in the sidebar"
-	@echo "🌐 UI will open in your browser at http://localhost:8501"
-	@echo "⚠️  Remember to start the API with: make run"
-	conda run -n $(CONDA_ENV) --no-capture-output streamlit run streamlit_app.py
+vectors: ## Generate basic AI descriptions and vector embeddings (requires OPENAI_API_KEY)
+	@echo "🧠 Setting up basic vector similarity search..."
+	@echo "💡 Note: Uses generic AI-generated descriptions"
+	@echo "💡 Use 'make enhanced-setup' for web-scraped descriptions instead"
+	@echo "📝 Step 1: Generating basic property descriptions..."
+	conda run -n $(CONDA_ENV) python etl/property_descriptions.py
+	@echo "🚀 Step 2: Creating vector embeddings and loading into Neo4j..."
+	conda run -n $(CONDA_ENV) python etl/vector_loader.py
+	@echo "✅ Vector search setup complete!"
+	@echo "🔍 Test with: make test-vectors"
 
-demo: ## Start both API and UI for complete demo experience
-	@echo "🚀 Starting complete Asset Insight Graph demo..."
-	@echo "📡 Starting FastAPI backend on http://localhost:8000"
-	@echo "🎨 Starting Streamlit UI on http://localhost:8501"
-	@echo "📊 Connect to your Neo4j database to see live data"
+descriptions: ## Generate enhanced property descriptions from CIM Group website
+	@echo "🏢 Generating enhanced property descriptions..."
+	@echo "🌐 Scraping data from CIM Group website..."
+	conda run -n $(CONDA_ENV) python etl/descriptions.py
+	@echo "✅ Enhanced descriptions generated!"
+	@echo "📁 Saved to: etl/cim_assets_enhanced.jsonl"
+
+enhanced-setup: ## Generate enhanced descriptions and vector embeddings (RECOMMENDED)
+	@echo "🧠 Setting up enhanced vector similarity search..."
+	@echo "✅ Using verified information from CIM Group website"
+	@echo "📝 Step 1: Generating enhanced property descriptions..."
+	$(MAKE) descriptions
+	@echo "🚀 Step 2: Creating vector embeddings and loading into Neo4j..."
+	conda run -n $(CONDA_ENV) python etl/enhanced_loader.py
+	@echo "✅ Enhanced vector search setup complete!"
+	@echo "🔍 Test with: make test-vectors"
+
+test-vectors: ## Test vector similarity search capabilities
+	@echo "🔍 Testing vector similarity search..."
+	@echo "💡 Trying: 'sustainable renewable energy projects'"
+	curl -s -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "sustainable renewable energy projects"}' | jq -r '.answer'
+	@echo "💡 Trying: 'luxury urban developments'"
+	curl -s -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "luxury urban developments"}' | jq -r '.answer'
+
+complete-setup: ## Complete setup from scratch with enhanced data (database + vectors)
+	@echo "🚀 Complete Asset Insight Graph Setup"
+	@echo "====================================="
+	@echo "✅ Using verified CIM Group website data"
+	@echo "📊 Step 1: Loading asset data..."
+	$(MAKE) load
+	@echo "🔍 Step 2: Verifying knowledge graph..."
+	$(MAKE) verify
+	@echo "🧠 Step 3: Setting up enhanced vector search (if OPENAI_API_KEY is set)..."
+	@if [ -n "$$OPENAI_API_KEY" ]; then \
+		$(MAKE) enhanced-setup; \
+	else \
+		echo "⚠️  OPENAI_API_KEY not set - skipping vector search setup"; \
+		echo "💡 Set OPENAI_API_KEY in .env to enable semantic similarity search"; \
+	fi
+	@echo "✅ Complete setup finished!"
+	@echo "🚀 Start the application with: make start-all"
+
+complete-setup-basic: ## Complete setup with basic synthetic data (for testing only)
+	@echo "🚀 Complete Asset Insight Graph Setup (Basic)"
+	@echo "=============================================="
+	@echo "⚠️  WARNING: Uses basic AI-generated descriptions"
+	@echo "📊 Step 1: Loading asset data..."
+	$(MAKE) load
+	@echo "🔍 Step 2: Verifying knowledge graph..."
+	$(MAKE) verify
+	@echo "🧠 Step 3: Setting up basic vector search (if OPENAI_API_KEY is set)..."
+	@if [ -n "$$OPENAI_API_KEY" ]; then \
+		$(MAKE) vectors; \
+	else \
+		echo "⚠️  OPENAI_API_KEY not set - skipping vector search setup"; \
+		echo "💡 Set OPENAI_API_KEY in .env to enable semantic similarity search"; \
+	fi
+	@echo "✅ Complete basic setup finished!"
+	@echo "🚀 Start the application with: make start-all"
+
+launch: ## Launch the complete application (alternative to demo)
+	@echo "🚀 Launching Asset Insight Graph..."
+	@echo "📡 FastAPI: http://localhost:8000"
+	@echo "🎨 Streamlit: http://localhost:8501"
+	@echo "📊 Knowledge graph with 12 CIM Group assets"
+	@echo "🧠 Vector search: $(shell [ -n "$$OPENAI_API_KEY" ] && echo "✅ Enabled" || echo "❌ Disabled (set OPENAI_API_KEY)")"
 	@echo ""
 	@echo "💡 Open two terminals and run:"
 	@echo "   Terminal 1: make run      # API backend"
-	@echo "   Terminal 2: make ui       # Streamlit UI"
+	@echo "   Terminal 2: make ui       # Streamlit interface"
 	@echo ""
 	@echo "Or use: make start-all  # Starts both in background"
 

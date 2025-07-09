@@ -1,9 +1,9 @@
-"""Generate PNG workflow diagrams like ps-genai-agents.
+"""Generate PNG workflow diagrams for Asset Insight Graph.
 
-Usage Example (like LangGraph):
+Usage Example:
     from docs.generate_diagram import draw_mermaid_png
     
-    # Generate workflow PNG (like ps-genai-agents)
+    # Generate workflow PNG
     draw_mermaid_png("my_workflow.png")
     
     # Or generate with default name
@@ -21,32 +21,46 @@ def create_workflow_diagram():
     mermaid_diagram = """stateDiagram-v2
     [*] --> __start__
     
-    __start__ --> guardrails
+    __start__ --> query_analysis
     
-    guardrails --> planner
-    guardrails --> __end__ : Invalid input
+    query_analysis --> vector_search : Semantic similarity detected
+    query_analysis --> pattern_matching : Graph pattern detected
+    query_analysis --> __end__ : Invalid input
     
-    planner --> tool_selection
+    vector_search --> embedding_generation
+    embedding_generation --> similarity_search
+    similarity_search --> format_results
     
-    tool_selection --> predefined_cypher : Pattern match found
-    tool_selection --> text2cypher : No pattern match
-    tool_selection --> error_tool_selection : Tool selection error
+    pattern_matching --> predefined_cypher : Pattern match found
+    pattern_matching --> text2cypher : No pattern match
+    pattern_matching --> error_handling : Pattern error
     
-    error_tool_selection --> summarize : Error handled
-    error_tool_selection --> __end__ : Unrecoverable error
+    error_handling --> format_results : Error handled
+    error_handling --> __end__ : Unrecoverable error
     
-    predefined_cypher --> summarize
+    predefined_cypher --> format_results
     predefined_cypher --> text2cypher : Fallback needed
     
-    text2cypher --> summarize
-    text2cypher --> error_tool_selection : Cypher generation failed
+    text2cypher --> format_results
+    text2cypher --> error_handling : Cypher generation failed
     
-    summarize --> final_answer
-    summarize --> guardrails : Validation needed
+    format_results --> final_answer
     
     final_answer --> __end__
     
     __end__ --> [*]
+    
+    state vector_search {
+        [*] --> embedding_keywords
+        [*] --> sustainability_themes
+        [*] --> similarity_queries
+        [*] --> property_features
+        
+        embedding_keywords --> [*]
+        sustainability_themes --> [*] 
+        similarity_queries --> [*]
+        property_features --> [*]
+    }
     
     state predefined_cypher {
         [*] --> assets_in_state
@@ -95,7 +109,7 @@ def generate_png_diagram(mermaid_content, output_path):
         temp_mermaid_path = temp_file.name
     
     try:
-        # Convert to PNG using Mermaid CLI (white background like ps-genai-agents)
+        # Convert to PNG using Mermaid CLI (white background)
         cmd = ['mmdc', '-i', temp_mermaid_path, '-o', str(output_path), 
                '--backgroundColor', 'white']
         subprocess.run(cmd, check=True, capture_output=True)
@@ -109,7 +123,7 @@ def generate_png_diagram(mermaid_content, output_path):
 
 def draw_mermaid_png(filename="multi_tool_workflow.png"):
     """
-    Generate PNG workflow diagram like LangGraph's draw_mermaid_png() method.
+    Generate PNG workflow diagram for Asset Insight Graph.
     
     Args:
         filename: Name of the PNG file to generate
@@ -140,7 +154,7 @@ def draw_mermaid_png(filename="multi_tool_workflow.png"):
         return False
 
 def main():
-    """Generate workflow PNG diagram like ps-genai-agents."""
+    """Generate workflow PNG diagram for Asset Insight Graph."""
     
     print("🎯 Generating Asset Insight Graph Workflow Diagram...")
     

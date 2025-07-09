@@ -1,8 +1,8 @@
 """
-Asset Insight Graph - Streamlit Demo Application
+Asset Insight Graph - Streamlit Application
 
 A user-friendly interface for querying real estate assets using natural language.
-Similar to ps-genai-agents but tailored for asset management.
+Advanced real estate and infrastructure asset intelligence platform.
 """
 
 import json
@@ -29,7 +29,7 @@ st.markdown(
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
 html, body, [class*='css'] { font-family: 'Inter', sans-serif; }
 .sidebar .stButton>button { border-radius: 16px; background-color: #f5f5f5; color: #00285b; border: 1px solid #dde1e6; padding: 0.25rem 0.75rem; margin: 0.25rem 0.25rem 0.25rem 0; }
-.main-header{font-size:2rem;font-weight:600;color:#00285b;text-align:center;margin-bottom:1rem;}
+.main-header{font-size:1.2rem;font-weight:600;color:#00285b;text-align:left;margin-bottom:0.5rem;}
 .response-highlight{background:#f5f7fa;padding:1rem;border-radius:4px;margin-bottom:0.5rem;}
 .sidebar .stButton>button:hover { background-color: #00285b; color: #ffffff; }
 </style>
@@ -42,12 +42,12 @@ class AssetInsightGraphUI:
     def __init__(self):
         self.api_base_url = "http://localhost:8000"
         self.example_questions = [
-            "assets in California",
-            "portfolio distribution",
-            "commercial buildings",
+            "sustainable renewable energy projects",
+            "luxury urban developments with premium amenities", 
+            "ESG-focused environmental investments",
+            "properties similar to Tribune Tower",
             "assets within 20km of Los Angeles",
-            "how many assets",
-            "residential properties in Texas",
+            "portfolio distribution",
         ]
 
     def check_api_health(self) -> bool:
@@ -86,12 +86,11 @@ class AssetInsightGraphUI:
         """Render the sidebar with example questions and info."""
         with st.sidebar:
             st.markdown("### Example Questions")
-            cols = st.columns(2)
+            st.markdown("Click any example to try it:")
+            
             for i, question in enumerate(self.example_questions):
-                if cols[i % 2].button(question, key=f"ex_{i}"):
+                if st.button(f"💭 {question}", key=f"ex_{i}", use_container_width=True):
                     st.session_state.pending_question = question
-                if i % 2 == 1 and i < len(self.example_questions) - 1:
-                    cols = st.columns(2)
 
             st.divider()
             if st.button("Clear Conversation"):
@@ -166,6 +165,7 @@ class AssetInsightGraphUI:
                     data=csv,
                     file_name=f"asset_query_{int(time.time())}.csv",
                     mime="text/csv",
+                    key=f"download_csv_{int(time.time() * 1000000)}",  # Unique key
                 )
 
     def render_cypher_details(self, response_data: Dict[str, Any]):
@@ -173,10 +173,56 @@ class AssetInsightGraphUI:
         with st.expander("🔍 Technical Details", expanded=False):
             if "cypher" in response_data:
                 st.markdown("**Generated Cypher Query:**")
-                st.markdown(
-                    f'<div class="cypher-box">{response_data["cypher"]}</div>',
-                    unsafe_allow_html=True,
-                )
+                # Format Cypher query for better readability
+                cypher = response_data["cypher"]
+                if cypher:
+                    # Clean up whitespace and add proper formatting
+                    formatted_cypher = self.format_cypher_query(cypher)
+                    st.code(formatted_cypher, language="sql")
+                else:
+                    st.code("No Cypher query generated", language="text")
+            
+            # Show search type information
+            if response_data.get("vector_search"):
+                st.markdown("**Search Type:** 🧠 Vector Similarity Search")
+                st.markdown("**Model:** OpenAI text-embedding-3-small (1536 dimensions)")
+                st.markdown("**Similarity Function:** Cosine similarity")
+            elif response_data.get("pattern_matched"):
+                st.markdown("**Search Type:** 📊 Pattern-Based Graph Query")
+                st.markdown("**Engine:** Neo4j Cypher with geospatial indexing")
+            
+            # Show query processing time if available
+            if "search_type" in response_data:
+                st.markdown(f"**Search Strategy:** {response_data['search_type'].replace('_', ' ').title()}")
+    
+    def format_cypher_query(self, cypher: str) -> str:
+        """Format Cypher query for better readability."""
+        if not cypher or cypher.strip() == "":
+            return "No query generated"
+        
+        # Basic Cypher formatting
+        formatted = cypher.strip()
+        
+        # Add line breaks after major clauses
+        major_clauses = ['MATCH', 'WHERE', 'WITH', 'RETURN', 'ORDER BY', 'LIMIT', 'CALL']
+        for clause in major_clauses:
+            formatted = formatted.replace(f' {clause} ', f'\n{clause} ')
+            formatted = formatted.replace(f'\n{clause}', f'\n{clause}')
+        
+        # Indent continuation lines
+        lines = formatted.split('\n')
+        formatted_lines = []
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if line:
+                # First line or lines starting with major clauses don't get indented
+                if i == 0 or any(line.startswith(clause) for clause in major_clauses):
+                    formatted_lines.append(line)
+                else:
+                    # Indent continuation lines
+                    formatted_lines.append(f"  {line}")
+        
+        return '\n'.join(formatted_lines)
 
     def render_data_visualization(self, response_data: Dict[str, Any]):
         """Create visualizations from the query results."""
