@@ -218,5 +218,4 @@ if __name__ == "__main__":
             location_str = asset['location'] if asset['location'] else "Location TBD"
             print(f"  {i+1}. {asset['name']} ({asset['platform']}) - {location_str}")
         
-        if len(clean_assets) > 5:
-            print(f"  ... and {len(clean_assets) - 5} more assets") 
+        if len(clean_assets) > 5:            print(f"  ... and {len(clean_assets) - 5} more assets") 

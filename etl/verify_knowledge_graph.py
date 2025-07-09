@@ -201,5 +201,4 @@ async def verify_knowledge_graph() -> None:
     print("📈 The CIM Asset Knowledge Graph is ready for analysis!")
 
 
-if __name__ == "__main__":
-    asyncio.run(verify_knowledge_graph()) 
+if __name__ == "__main__":    asyncio.run(verify_knowledge_graph()) 

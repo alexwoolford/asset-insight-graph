@@ -128,5 +128,4 @@ async def cleanup_database() -> None:
     print("   2. Verify loading: make verify")
 
 
-if __name__ == "__main__":
-    asyncio.run(cleanup_database()) 
+if __name__ == "__main__":    asyncio.run(cleanup_database()) 
