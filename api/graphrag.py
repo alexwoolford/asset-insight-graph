@@ -26,6 +26,7 @@ class QueryCategory(Enum):
     """Query categories for intent classification."""
     ECONOMIC_DATA = "economic_data"
     GEOGRAPHIC_ASSETS = "geographic_assets" 
+    GEOGRAPHIC_SEMANTIC_COMBINED = "geographic_semantic_combined"
     PORTFOLIO_ANALYSIS = "portfolio_analysis"
     SEMANTIC_SEARCH = "semantic_search"
     TREND_ANALYSIS = "trend_analysis"
@@ -76,14 +77,32 @@ class CypherTemplate:
                 RETURN a.name, a.city, a.state, a.building_type, a.platform
                 ORDER BY a.name
             """,
+            "state_type_filter": """
+                MATCH (a:Asset) 
+                WHERE a.state = $state_name AND a.building_type = $building_type
+                RETURN a.name, a.city, a.state, a.building_type, a.platform
+                ORDER BY a.name
+            """,
             "city_filter": """
                 MATCH (a:Asset) 
                 WHERE a.city = $city_name
                 RETURN a.name, a.city, a.state, a.building_type, a.platform
                 ORDER BY a.name
             """,
+            "city_type_filter": """
+                MATCH (a:Asset) 
+                WHERE a.city = $city_name AND a.building_type = $building_type
+                RETURN a.name, a.city, a.state, a.building_type, a.platform
+                ORDER BY a.name
+            """,
             "region_filter": """
-                MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(:State)-[:PART_OF]->(r:Region {{name: $region_name}})
+                MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(:State)-[:PART_OF]->(r:Region {name: $region_name})
+                RETURN a.name, a.city, a.state, a.building_type, a.platform
+                ORDER BY a.name
+            """,
+            "region_type_filter": """
+                MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(:State)-[:PART_OF]->(r:Region {name: $region_name})
+                WHERE a.building_type = $building_type
                 RETURN a.name, a.city, a.state, a.building_type, a.platform
                 ORDER BY a.name
             """,
@@ -107,11 +126,11 @@ class CypherTemplate:
         
         self.economic_templates = {
             "latest_metric": """
-                MATCH (mt:MetricType {{name: $metric_name}})-[:TAIL]->(mv:MetricValue)
+                MATCH (mt:MetricType {name: $metric_name})-[:TAIL]->(mv:MetricValue)
                 RETURN mt.name AS metric, mv.value AS current_value, mv.date AS current_date
             """,
             "trend_analysis": """
-                MATCH (mt:MetricType {{name: $metric_name}})-[:HEAD]->(first:MetricValue)
+                MATCH (mt:MetricType {name: $metric_name})-[:HEAD]->(first:MetricValue)
                 MATCH (mt)-[:TAIL]->(last:MetricValue)
                 RETURN mt.name AS metric, 
                        first.value AS start_value, first.date AS start_date,
@@ -163,7 +182,61 @@ class CypherTemplate:
         question_lower = question.lower()
         params = {}
         
-        # Extract location mentions
+        # Check for distance-based queries first (geospatial)
+        import re
+        distance_pattern = r'within\s+(\d+)\s*(km|kilometer|mile|miles)\s+of\s+([^.]+)'
+        distance_match = re.search(distance_pattern, question_lower)
+        
+        if distance_match:
+            distance = int(distance_match.group(1))
+            unit = distance_match.group(2)
+            reference_location = distance_match.group(3).strip()
+            
+            # Use geospatial distance query
+            cypher = """
+            // First find the reference location (could be a city or asset)
+            OPTIONAL MATCH (refAsset:Asset)
+            WHERE toLower(refAsset.name) CONTAINS toLower($reference)
+            
+            OPTIONAL MATCH (refCity:City)
+            WHERE toLower(refCity.name) CONTAINS toLower($reference)
+            
+            // Use whichever reference we found
+            WITH COALESCE(refAsset.location, refCity.location) AS ref_point
+            WHERE ref_point IS NOT NULL
+            
+            // Find assets within distance
+            MATCH (a:Asset)
+            WHERE a.location IS NOT NULL
+            WITH a, ref_point, toInteger($distance) AS distance, $unit AS unit,
+                 point.distance(a.location, ref_point) AS distance_meters
+            WHERE (unit IN ['km', 'kilometer'] AND distance_meters <= distance * 1000) OR
+                  (unit IN ['mile', 'miles'] AND distance_meters <= distance * 1609.34)
+            RETURN a.name, a.city, a.state, a.building_type, a.platform,
+                   round(distance_meters/1000, 1) AS distance_km
+            ORDER BY distance_meters
+            """
+            
+            params = {
+                "reference": reference_location,
+                "distance": distance,
+                "unit": unit
+            }
+            
+            return cypher, params
+        
+        # Check for building type filters
+        building_type_filter = None
+        if "mixed use" in question_lower:
+            building_type_filter = "Mixed Use"
+        elif "commercial" in question_lower:
+            building_type_filter = "Commercial"
+        elif "residential" in question_lower:
+            building_type_filter = "Residential"
+        elif "infrastructure" in question_lower:
+            building_type_filter = "Infrastructure"
+        
+        # Extract location mentions (non-distance queries)
         states = ["california", "texas", "illinois", "missouri", "wisconsin"]
         cities = ["los angeles", "houston", "austin", "chicago", "milwaukee", "appleton", "west hollywood"]
         regions = ["west", "southwest", "midwest", "northeast", "southeast"]
@@ -171,17 +244,29 @@ class CypherTemplate:
         for state in states:
             if state in question_lower:
                 params["state_name"] = state.title()
-                return self.geographic_templates["state_filter"], params
+                if building_type_filter:
+                    params["building_type"] = building_type_filter
+                    return self.geographic_templates["state_type_filter"], params
+                else:
+                    return self.geographic_templates["state_filter"], params
         
         for city in cities:
             if city in question_lower:
                 params["city_name"] = city.title()
-                return self.geographic_templates["city_filter"], params
+                if building_type_filter:
+                    params["building_type"] = building_type_filter
+                    return self.geographic_templates["city_type_filter"], params
+                else:
+                    return self.geographic_templates["city_filter"], params
                 
         for region in regions:
             if region in question_lower:
                 params["region_name"] = region.title()
-                return self.geographic_templates["region_filter"], params
+                if building_type_filter:
+                    params["building_type"] = building_type_filter
+                    return self.geographic_templates["region_type_filter"], params
+                else:
+                    return self.geographic_templates["region_filter"], params
         
         # Default to all assets
         return self.geographic_templates["all_assets"], {}
@@ -258,36 +343,29 @@ class GraphRAG:
         
         question_lower = question.lower()
         
-        # Check for semantic keywords FIRST (highest priority)
-        semantic_keywords = ["sustainable", "ESG", "renewable", "green", "luxury", "premium", "high-end", "environmental", "carbon", "solar", "energy", "eco-friendly", "similar to", "like", "comparable"]
+        # Check for COMBINED geographic + semantic queries FIRST
+        semantic_keywords = ["sustainable", "esg", "renewable", "green", "luxury", "premium", "high-end", "environmental", "carbon", "solar", "energy", "eco-friendly", "similar to", "like", "comparable"]
+        geographic_keywords = ["california", "texas", "los angeles", "houston", "austin", "properties in", "assets in", "located in", "chicago", "milwaukee", "wisconsin", "missouri"]
         
-        if any(keyword.lower() in question_lower for keyword in semantic_keywords):
+        has_semantic = any(keyword.lower() in question_lower for keyword in semantic_keywords)
+        has_geographic = any(keyword in question_lower for keyword in geographic_keywords)
+        
+        if has_semantic and has_geographic:
+            return IntentClassification(
+                category=QueryCategory.GEOGRAPHIC_SEMANTIC_COMBINED,
+                confidence=0.98,
+                reasoning="Question combines geographic filtering with semantic search criteria"
+            )
+        
+        # Priority 2: Pure semantic queries
+        if has_semantic:
             return IntentClassification(
                 category=QueryCategory.SEMANTIC_SEARCH,
                 confidence=0.95,
                 reasoning=f"Contains semantic keywords requiring vector search"
             )
         
-        # Portfolio analysis keywords (second priority)
-        portfolio_keywords = ["portfolio", "distribution", "how many", "count", "platform", "breakdown"]
-        if any(keyword in question_lower for keyword in portfolio_keywords):
-            return IntentClassification(
-                category=QueryCategory.PORTFOLIO_ANALYSIS,
-                confidence=0.95,
-                reasoning="Question asks about portfolio composition or asset counts"
-            )
-        
-        # Geographic keywords (third priority - after semantic check)
-        geographic_keywords = ["california", "texas", "los angeles", "houston", "austin", "properties in", "assets in", "located in"]
-        if any(keyword in question_lower for keyword in geographic_keywords):
-            # Check if it's ONLY geographic without semantic terms
-            return IntentClassification(
-                category=QueryCategory.GEOGRAPHIC_ASSETS,
-                confidence=0.90,
-                reasoning="Question refers to specific geographic locations"
-            )
-        
-        # Economic keywords  
+        # Priority 3: Economic keywords (moved up before geographic to handle "unemployment in California" correctly)
         economic_keywords = ["unemployment", "interest rate", "mortgage", "federal funds", "economic", "rate"]
         if any(keyword in question_lower for keyword in economic_keywords):
             return IntentClassification(
@@ -296,7 +374,24 @@ class GraphRAG:
                 reasoning="Question asks about economic indicators"
             )
         
-        # Trend keywords
+        # Priority 4: Portfolio analysis keywords 
+        portfolio_keywords = ["portfolio", "distribution", "how many", "count", "platform", "breakdown"]
+        if any(keyword in question_lower for keyword in portfolio_keywords):
+            return IntentClassification(
+                category=QueryCategory.PORTFOLIO_ANALYSIS,
+                confidence=0.95,
+                reasoning="Question asks about portfolio composition or asset counts"
+            )
+        
+        # Priority 5: Pure geographic keywords (moved down so economic queries with locations are handled correctly)
+        if has_geographic:
+            return IntentClassification(
+                category=QueryCategory.GEOGRAPHIC_ASSETS,
+                confidence=0.90,
+                reasoning="Question refers to specific geographic locations"
+            )
+        
+        # Priority 6: Trend keywords
         trend_keywords = ["trend", "change", "over time", "historical", "compare"]
         if any(keyword in question_lower for keyword in trend_keywords):
             return IntentClassification(
@@ -326,6 +421,69 @@ class GraphRAG:
             print(f"Cypher execution error: {e}")
             return []
     
+    def _extract_asset_name(self, question: str) -> str:
+        """Extract asset name from similarity queries."""
+        question_lower = question.lower()
+        
+        # Known asset names
+        asset_names = [
+            "the independent", "innovation plaza", "the lot at formosa", 
+            "front & york", "centennial yards", "the adeline", "the view apartments",
+            "tribune tower", "terreva renewables", "aquamarine solar project",
+            "antelope valley water bank", "maryville carbon solutions"
+        ]
+        
+        # Look for asset names in the question
+        for asset in asset_names:
+            if asset in question_lower:
+                return asset.title()
+        
+        # Try to extract from patterns like "similar to X" or "like X"
+        import re
+        patterns = [
+            r"similar to (.+?)(?:\s|$)",
+            r"like (.+?)(?:\s|$)", 
+            r"comparable to (.+?)(?:\s|$)"
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, question_lower)
+            if match:
+                extracted = match.group(1).strip()
+                # Clean up common endings
+                extracted = re.sub(r'[.!?]$', '', extracted)
+                return extracted.title()
+        
+        return ""
+
+    def _extract_geographic_filter(self, question: str) -> dict:
+        """Extract geographic filters from a question."""
+        question_lower = question.lower()
+        filters = {}
+        
+        # Check for states
+        states = ["california", "texas", "illinois", "missouri", "wisconsin", "new york", "georgia", "arizona"]
+        for state in states:
+            if state in question_lower:
+                filters["state"] = state.title()
+                break
+        
+        # Check for cities
+        cities = ["los angeles", "houston", "austin", "chicago", "milwaukee", "appleton", "west hollywood", "atlanta", "new york", "phoenix"]
+        for city in cities:
+            if city in question_lower:
+                filters["city"] = city.title()
+                break
+        
+        # Check for regions
+        regions = ["west", "southwest", "midwest", "northeast", "southeast"]
+        for region in regions:
+            if region in question_lower:
+                filters["region"] = region.title()
+                break
+        
+        return filters
+
     async def _vector_search_tool(self, question: str) -> str:
         """Perform semantic vector search on asset descriptions."""
         try:
@@ -375,7 +533,9 @@ class GraphRAG:
                 results = []
                 for item in data:
                     results.append(f"{item['asset_name']} ({item['city']}, {item['state']}) - {item['building_type']} (similarity: {item['similarity_score']:.3f})")
-                return f"Found {len(data)} semantically similar assets: " + ", ".join(results[:3])
+                
+                # Show all results found (no artificial limit)
+                return f"Found {len(data)} semantically similar assets: " + ", ".join(results)
             else:
                 return "No semantically similar assets found."
                 
@@ -390,6 +550,8 @@ class GraphRAG:
         
         # Step 2: Route to appropriate handler
         if intent.category == QueryCategory.SEMANTIC_SEARCH:
+            return await self._handle_semantic_query(question, intent)
+        elif intent.category == QueryCategory.GEOGRAPHIC_SEMANTIC_COMBINED:
             return await self._handle_semantic_query(question, intent)
         elif intent.category == QueryCategory.PORTFOLIO_ANALYSIS:
             return await self._handle_portfolio_query(question, intent)
@@ -441,7 +603,8 @@ class GraphRAG:
             cypher, params = self.cypher_templates.generate_geographic_query(question)
             data = await self.execute_cypher_query(cypher, params)
             
-            formatted_answer = self._format_asset_table(data)
+            # Use context-aware geographic answer formatting
+            formatted_answer = self._format_geographic_answer(data, question)
             
             return {
                 "answer": formatted_answer,
@@ -455,59 +618,170 @@ class GraphRAG:
                     "confidence": intent.confidence,
                     "reasoning": intent.reasoning
                 },
-                "system_used": "graphrag",
                 "geospatial_enabled": True
             }
+            
         except Exception as e:
-            return {
-                "answer": f"Geographic query failed: {str(e)}",
-                "cypher": None,
-                "data": [],
-                "question": question,
-                "pattern_matched": False,
-                "error": str(e)
-            }
+            print(f"Geographic query error: {e}")
+            return await self._handle_general_query(question, intent)
     
     async def _handle_semantic_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
-        """Handle semantic search queries using vector similarity."""
+        """Handle semantic search queries with optional geographic filtering."""
         try:
-            # Use vector search for semantic queries
-            vector_result = await self._vector_search_tool(question)
+            question_lower = question.lower()
             
-            # Also try template-based semantic search as backup
-            cypher, params = self.cypher_templates.generate_semantic_query(question)
-            backup_data = await self.execute_cypher_query(cypher, params)
+            # Extract geographic filters if present
+            geo_filters = self._extract_geographic_filter(question)
             
-            # Prefer vector search results
-            if "Found" in vector_result and "semantically similar" in vector_result:
-                answer = vector_result
-                data = backup_data  # Include backup data for context
-                cypher_query = cypher.strip()
-            elif backup_data:
-                answer = self._format_asset_table(backup_data)
-                data = backup_data
-                cypher_query = cypher.strip()
+            # Check if this is an asset similarity query
+            if "similar to" in question_lower or "like" in question_lower or "comparable" in question_lower:
+                # Extract asset name from query
+                asset_name = self._extract_asset_name(question)
+                if asset_name:
+                    # Find similar assets using vector search with the asset name as seed
+                    vector_result = await self._vector_search_tool(f"Properties like {asset_name} mixed use development")
+                else:
+                    # Fallback to general similarity search
+                    vector_result = await self._vector_search_tool(question)
             else:
-                answer = "No assets found matching your semantic search criteria."
-                data = []
-                cypher_query = cypher.strip()
+                # Build semantic search query with geographic constraints
+                if geo_filters:
+                    # For geographic + semantic queries, use vector search with geographic post-filtering
+                    vector_result = await self._vector_search_tool(question)
+                    
+                    # Parse vector results and apply geographic filtering
+                    if "Found" in vector_result and "semantically similar" in vector_result:
+                        vector_data = self._parse_vector_search_results(vector_result)
+                        
+                        # Apply geographic filter to vector results
+                        if vector_data:
+                            filtered_data = self._apply_geographic_filter(vector_data, geo_filters)
+                            
+                            if filtered_data:
+                                answer = f"Found {len(filtered_data)} assets matching your criteria:"
+                                for asset in filtered_data:
+                                    answer += f"\n• {asset['name']} ({asset['city']}, {asset['state']}) - {asset['building_type']}"
+                                
+                                return {
+                                    "answer": answer,
+                                    "cypher": "Vector search with geographic filtering",
+                                    "data": filtered_data,
+                                    "question": question,
+                                    "pattern_matched": True,
+                                    "query_type": "geographic_semantic_vector_search",
+                                    "geographic_filters": geo_filters,
+                                    "intent_classification": {
+                                        "category": intent.category.value,
+                                        "confidence": intent.confidence,
+                                        "reasoning": intent.reasoning
+                                    },
+                                    "system_used": "graphrag",
+                                    "geospatial_enabled": True
+                                }
+                            else:
+                                # No results after geographic filtering
+                                geo_desc = ""
+                                if "state" in geo_filters:
+                                    geo_desc = f"in {geo_filters['state']}"
+                                elif "city" in geo_filters:
+                                    geo_desc = f"in {geo_filters['city']}"
+                                elif "region" in geo_filters:
+                                    geo_desc = f"in the {geo_filters['region']} region"
+                                
+                                answer = f"No assets found matching your criteria {geo_desc}. Found semantically similar assets in other locations, but none in the specified geographic area."
+                                return {
+                                    "answer": answer,
+                                    "cypher": "Vector search with geographic filtering (no results)",
+                                    "data": [],
+                                    "question": question,
+                                    "pattern_matched": True,
+                                    "query_type": "geographic_semantic_search_no_results",
+                                    "geographic_filters": geo_filters,
+                                    "intent_classification": {
+                                        "category": intent.category.value,
+                                        "confidence": intent.confidence,
+                                        "reasoning": intent.reasoning
+                                    },
+                                    "system_used": "graphrag",
+                                    "geospatial_enabled": True
+                                }
+                    
+                    # Vector search failed - fall back to geographic search only
+                    cypher, params = self.cypher_templates.generate_geographic_query(question)
+                    data = await self.execute_cypher_query(cypher, params)
+                    
+                    if data:
+                        answer = f"Found {len(data)} assets in the specified location (semantic search unavailable):"
+                        answer = self._format_asset_table(data)
+                    else:
+                        answer = f"No assets found in the specified location."
+                    
+                    return {
+                        "answer": answer,
+                        "cypher": cypher.strip(),
+                        "data": data,
+                        "question": question,
+                        "pattern_matched": True,
+                        "query_type": "geographic_fallback_search",
+                        "geographic_filters": geo_filters,
+                        "intent_classification": {
+                            "category": intent.category.value,
+                            "confidence": intent.confidence,
+                            "reasoning": intent.reasoning
+                        },
+                        "system_used": "graphrag",
+                        "geospatial_enabled": True
+                    }
+                else:
+                    # No geographic constraints - use vector search
+                    vector_result = await self._vector_search_tool(question)
             
-            return {
-                "answer": answer,
-                "cypher": cypher_query,
-                "data": data,
-                "question": question,
-                "pattern_matched": True,
-                "query_type": "semantic_vector_search",
-                "vector_search": True,
-                "intent_classification": {
-                    "category": intent.category.value,
-                    "confidence": intent.confidence,
-                    "reasoning": intent.reasoning
-                },
-                "system_used": "graphrag",
-                "geospatial_enabled": True
-            }
+            # Fallback to template-based semantic search if no geographic constraints
+            if not geo_filters:
+                # For pure semantic searches, use vector search primarily
+                vector_result = await self._vector_search_tool(question)
+                
+                # Parse vector search results for table data if successful
+                if "Found" in vector_result and "semantically similar" in vector_result:
+                    # Extract asset information from vector search results
+                    vector_data = self._parse_vector_search_results(vector_result)
+                    
+                    # If parsing worked, use vector data
+                    if vector_data:
+                        answer = vector_result
+                        data = vector_data
+                        cypher_query = "Vector similarity search using embeddings"
+                    else:
+                        # Parsing failed - fall back to template search
+                        print("Vector search parsing failed, falling back to template search")
+                        cypher, params = self.cypher_templates.generate_semantic_query(question)
+                        backup_data = await self.execute_cypher_query(cypher, params)
+                        
+                        if backup_data:
+                            answer = self._format_asset_table(backup_data)
+                            data = backup_data
+                            cypher_query = cypher.strip()
+                        else:
+                            answer = "No assets found matching your semantic search criteria."
+                            data = []
+                            cypher_query = cypher.strip() if 'cypher' in locals() else ""
+                
+                return {
+                    "answer": answer,
+                    "cypher": cypher_query,
+                    "data": data,
+                    "question": question,
+                    "pattern_matched": True,
+                    "query_type": "semantic_vector_search",
+                    "vector_search": True,
+                    "intent_classification": {
+                        "category": intent.category.value,
+                        "confidence": intent.confidence,
+                        "reasoning": intent.reasoning
+                    },
+                    "system_used": "graphrag",
+                    "geospatial_enabled": True
+                }
             
         except Exception as e:
             return {
@@ -519,7 +793,93 @@ class GraphRAG:
                 "error": str(e),
                 "vector_search": False
             }
-    
+
+    def _parse_vector_search_results(self, vector_result: str) -> List[Dict]:
+        """Parse vector search results text into structured data for table display."""
+        try:
+            # The vector result format is like:
+            # "Found 5 semantically similar assets: Terreva Renewables (Appleton, Wisconsin) - Energy Infrastructure (similarity: 0.747), Aquamarine Solar Project (San Joaquin Valley, California) - Energy Infrastructure (similarity: 0.744), Maryville Carbon Solutions (Maryville, Missouri) - Environmental Infrastructure (similarity: 0.656)"
+            
+            import re
+            
+            # First extract the part after "Found X semantically similar assets:"
+            start_match = re.search(r'Found \d+ semantically similar assets:\s*(.+)', vector_result)
+            if not start_match:
+                return []
+            
+            assets_text = start_match.group(1)
+            
+            # Use a comprehensive regex to find all asset patterns in the text
+            # Pattern: Asset Name (City, State) - Building Type (similarity: X.XXX)
+            asset_pattern = r'([A-Za-z\s&\'-]+?)\s*\(([^)]+)\)\s*-\s*([^(]+?)\s*\(similarity:\s*([0-9.]+)\)'
+            matches = re.findall(asset_pattern, assets_text)
+            
+            parsed_data = []
+            for match in matches:
+                name = match[0].strip()
+                location = match[1].strip()
+                building_type = match[2].strip()
+                similarity_score = float(match[3])
+                
+                # Clean up any leading punctuation from name
+                name = re.sub(r'^[,\s]+', '', name)
+                
+                # Split location into city, state
+                location_parts = location.split(', ')
+                city = location_parts[0] if location_parts else ''
+                state = location_parts[1] if len(location_parts) > 1 else ''
+                
+                parsed_data.append({
+                    'name': name,
+                    'city': city,
+                    'state': state,
+                    'building_type': building_type,
+                    'platform': 'Infrastructure',  # Default assumption based on data
+                    'similarity_score': similarity_score
+                })
+            
+            return parsed_data
+            
+        except Exception as e:
+            # If regex parsing fails, return empty list for fallback handling
+            return []
+
+    def _apply_geographic_filter(self, data: List[Dict], geo_filters: dict) -> List[Dict]:
+        """Apply geographic filters to a list of asset dictionaries."""
+        if not geo_filters:
+            return data
+        
+        filtered_data = []
+        
+        for asset in data:
+            asset_matches = False
+            
+            # Check state filter (highest priority)
+            if "state" in geo_filters:
+                asset_state = asset.get('state', '').lower()
+                if asset_state == geo_filters['state'].lower():
+                    asset_matches = True
+            
+            # Check city filter (if no state filter or state matches)
+            elif "city" in geo_filters:
+                asset_city = asset.get('city', '').lower()
+                if asset_city == geo_filters['city'].lower():
+                    asset_matches = True
+            
+            # Check region filter (if no state/city filter or they match)
+            elif "region" in geo_filters:
+                # For region filtering, we need to check state-to-region mapping
+                asset_state = asset.get('state', '')
+                if asset_state in self.cypher_templates.state_regions:
+                    asset_region = self.cypher_templates.state_regions[asset_state]
+                    if asset_region.lower() == geo_filters['region'].lower():
+                        asset_matches = True
+            
+            if asset_matches:
+                filtered_data.append(asset)
+        
+        return filtered_data
+
     async def _handle_economic_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
         """Handle economic data queries."""
         try:
@@ -667,15 +1027,19 @@ class GraphRAG:
         if not data:
             return "No assets found."
         
-        # Extract columns
+        # Check if this is a distance-based query (has distance_km field)
+        has_distance = any(item.get('distance_km') is not None for item in data if isinstance(item, dict))
+        
+        # Extract columns with proper field mapping
         rows = []
         for item in data:
             if isinstance(item, dict):
-                # Handle different field name patterns
-                name = item.get('name', item.get('a.name', 'Unknown Asset'))
-                city = item.get('city', item.get('a.city', ''))
-                state = item.get('state', item.get('a.state', ''))
-                building_type = item.get('building_type', item.get('a.building_type', ''))
+                # Handle different field name patterns from Neo4j results
+                name = item.get('name') or item.get('a.name') or 'Unknown Asset'
+                city = item.get('city') or item.get('a.city') or ''
+                state = item.get('state') or item.get('a.state') or ''
+                building_type = item.get('building_type') or item.get('a.building_type') or 'Unknown'
+                platform = item.get('platform') or item.get('a.platform') or 'Unknown'
                 
                 location = ""
                 if city and state:
@@ -684,20 +1048,48 @@ class GraphRAG:
                     location = city
                 elif state:
                     location = state
+                else:
+                    location = "Unknown"
                 
-                rows.append((name, location, building_type))
+                if has_distance:
+                    distance_km = item.get('distance_km', '')
+                    distance_str = f"{distance_km} km" if distance_km else "N/A"
+                    rows.append((name, location, building_type, platform, distance_str))
+                else:
+                    rows.append((name, location, building_type, platform))
         
         if not rows:
             return "No assets found."
         
-        # Create table with proper columns
-        lines = ["Asset Details:"]
-        lines.append("=" * 75)
-        lines.append(f"{'Asset Name':<30} {'Location':<20} {'Type':<20}")
-        lines.append("-" * 75)
+        # Create properly formatted table with better spacing
+        lines = []
+        lines.append("Asset Details:")
+        lines.append("=" * 120)
         
-        for name, location, building_type in rows:
-            lines.append(f"{name[:29]:<30} {location[:19]:<20} {building_type[:19]:<20}")
+        if has_distance:
+            lines.append(f"{'Asset Name':<30} {'Location':<25} {'Type':<20} {'Platform':<15} {'Distance':<10}")
+            lines.append("-" * 120)
+            
+            for name, location, building_type, platform, distance in rows:
+                # Truncate long fields to fit in columns
+                name_truncated = (name[:27] + "...") if len(name) > 30 else name
+                location_truncated = (location[:22] + "...") if len(location) > 25 else location
+                type_truncated = (building_type[:17] + "...") if len(building_type) > 20 else building_type
+                platform_truncated = (platform[:12] + "...") if len(platform) > 15 else platform
+                
+                lines.append(f"{name_truncated:<30} {location_truncated:<25} {type_truncated:<20} {platform_truncated:<15} {distance:<10}")
+        else:
+            lines.append(f"{'Asset Name':<30} {'Location':<25} {'Type':<20} {'Platform':<15}")
+            lines.append("-" * 100)
+            
+            for name, location, building_type, platform in rows:
+                # Truncate long fields to fit in columns
+                name_truncated = (name[:27] + "...") if len(name) > 30 else name
+                location_truncated = (location[:22] + "...") if len(location) > 25 else location
+                type_truncated = (building_type[:17] + "...") if len(building_type) > 20 else building_type
+                platform_truncated = (platform[:12] + "...") if len(platform) > 15 else platform
+                
+                lines.append(f"{name_truncated:<30} {location_truncated:<25} {type_truncated:<20} {platform_truncated:<15}")
         
         return "\n".join(lines)
     
@@ -745,6 +1137,52 @@ class GraphRAG:
             lines.append(f"{metric[:24]:<25} {value[:24]:<25} {date[:24]:<25}")
         
         return "\n".join(lines)
+
+    def _format_geographic_answer(self, data: List[Dict], question: str) -> str:
+        """Format geographic query answers with context-aware language."""
+        if not data:
+            return "No matching assets found for this geographic query."
+        
+        # Check if this is a distance-based query
+        import re
+        distance_pattern = r'within\s+(\d+)\s*(km|kilometer|mile|miles)\s+of\s+([^.]+)'
+        distance_match = re.search(distance_pattern, question.lower())
+        
+        if distance_match:
+            distance = distance_match.group(1)
+            unit = distance_match.group(2)
+            reference_location = distance_match.group(3).strip()
+            
+            # Format distance-based response
+            count = len(data)
+            if count == 1:
+                return f"Found {count} asset within {distance} {unit} of {reference_location}."
+            else:
+                return f"Found {count} assets within {distance} {unit} of {reference_location}."
+        
+        # Regular geographic queries
+        question_lower = question.lower()
+        count = len(data)
+        
+        if "california" in question_lower:
+            location_name = "California"
+        elif "texas" in question_lower:
+            location_name = "Texas"
+        elif "los angeles" in question_lower:
+            location_name = "Los Angeles"
+        elif "houston" in question_lower:
+            location_name = "Houston"
+        elif "austin" in question_lower:
+            location_name = "Austin"
+        elif "chicago" in question_lower:
+            location_name = "Chicago"
+        else:
+            location_name = "the specified location"
+        
+        if count == 1:
+            return f"Found {count} asset in {location_name}."
+        else:
+            return f"Found {count} assets in {location_name}."
 
 
 # Factory function for easy instantiation
