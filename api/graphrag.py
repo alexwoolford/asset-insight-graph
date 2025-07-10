@@ -1,7 +1,8 @@
-"""GraphRAG implementation using intelligent Cypher generation.
+"""GraphRAG implementation using LangGraph workflow orchestration.
 
 This module provides intelligent querying capabilities using:
-- Template-based Cypher generation (no more GROUP BY nonsense)
+- LangGraph workflow orchestration
+- Template-based Cypher generation  
 - Schema-aware query patterns
 - Proper validation and fallbacks
 - LLM-powered intent classification
@@ -12,13 +13,16 @@ from __future__ import annotations
 import os
 import asyncio
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TypedDict
 from enum import Enum
 
 import openai
 from langchain_openai import ChatOpenAI
 from langchain_neo4j import Neo4jGraph
 from pydantic import BaseModel
+from langgraph.graph import StateGraph
+from langgraph.graph.message import add_messages
+from langchain_core.messages import BaseMessage
 
 from .config import Settings, get_driver
 
@@ -37,6 +41,20 @@ class IntentClassification(BaseModel):
     category: QueryCategory
     confidence: float
     reasoning: str
+
+class AssetGraphState(TypedDict):
+    """State for the asset analysis workflow."""
+    question: str
+    intent: Optional[IntentClassification]
+    cypher_query: Optional[str]
+    cypher_params: Optional[Dict]
+    raw_data: Optional[List[Dict]]
+    answer: str
+    formatted_data: Optional[List[Dict]]
+    workflow_steps: List[str]
+    error_messages: List[str]
+    query_type: str
+    pattern_matched: bool
 
 class CypherTemplate:
     """Smart Cypher template that generates valid queries."""
@@ -321,92 +339,68 @@ class CypherTemplate:
         if "trend" in question_lower or "change" in question_lower:
             return self.economic_templates["trend_analysis"], params
         else:
-            return self.economic_templates["latest_metric"], params
+            return self.economic_templates["latest_metric"], params 
+
 
 class GraphRAG:
-    """Intelligent GraphRAG with template-based Cypher generation."""
+    """LangGraph-based GraphRAG with proper workflow orchestration"""
     
     def __init__(self):
         self.llm = self._initialize_llm()
         self.cypher_templates = CypherTemplate()
+        self.workflow = self._build_workflow()
         
     def _initialize_llm(self) -> ChatOpenAI:
-        """Initialize the LLM for intent classification only."""
+        """Initialize the LLM for intent classification"""
         return ChatOpenAI(
             model="gpt-4o-mini",
             temperature=0,
             openai_api_key=os.getenv("OPENAI_API_KEY")
         )
     
-    async def classify_intent(self, question: str) -> IntentClassification:
-        """Classify user intent using keyword detection with priority."""
+    def _build_workflow(self) -> StateGraph:
+        """Build the LangGraph workflow with proper state transitions"""
         
-        question_lower = question.lower()
+        workflow = StateGraph(AssetGraphState)
         
-        # Check for COMBINED geographic + semantic queries FIRST
-        semantic_keywords = ["sustainable", "esg", "renewable", "green", "luxury", "premium", "high-end", "environmental", "carbon", "solar", "energy", "eco-friendly", "similar to", "like", "comparable"]
-        geographic_keywords = ["california", "texas", "los angeles", "houston", "austin", "properties in", "assets in", "located in", "chicago", "milwaukee", "wisconsin", "missouri"]
+        # Add nodes
+        workflow.add_node("classify_intent", self._classify_intent_node)
+        workflow.add_node("portfolio_analysis", self._portfolio_analysis_node)
+        workflow.add_node("geographic_search", self._geographic_search_node)
+        workflow.add_node("semantic_search", self._semantic_search_node)
+        workflow.add_node("economic_data", self._economic_data_node)
+        workflow.add_node("format_response", self._format_response_node)
+        workflow.add_node("handle_error", self._handle_error_node)
         
-        has_semantic = any(keyword.lower() in question_lower for keyword in semantic_keywords)
-        has_geographic = any(keyword in question_lower for keyword in geographic_keywords)
+        # Set entry point
+        workflow.set_entry_point("classify_intent")
         
-        if has_semantic and has_geographic:
-            return IntentClassification(
-                category=QueryCategory.GEOGRAPHIC_SEMANTIC_COMBINED,
-                confidence=0.98,
-                reasoning="Question combines geographic filtering with semantic search criteria"
-            )
-        
-        # Priority 2: Pure semantic queries
-        if has_semantic:
-            return IntentClassification(
-                category=QueryCategory.SEMANTIC_SEARCH,
-                confidence=0.95,
-                reasoning=f"Contains semantic keywords requiring vector search"
-            )
-        
-        # Priority 3: Economic keywords (moved up before geographic to handle "unemployment in California" correctly)
-        economic_keywords = ["unemployment", "interest rate", "mortgage", "federal funds", "economic", "rate"]
-        if any(keyword in question_lower for keyword in economic_keywords):
-            return IntentClassification(
-                category=QueryCategory.ECONOMIC_DATA,
-                confidence=0.90,
-                reasoning="Question asks about economic indicators"
-            )
-        
-        # Priority 4: Portfolio analysis keywords 
-        portfolio_keywords = ["portfolio", "distribution", "how many", "count", "platform", "breakdown"]
-        if any(keyword in question_lower for keyword in portfolio_keywords):
-            return IntentClassification(
-                category=QueryCategory.PORTFOLIO_ANALYSIS,
-                confidence=0.95,
-                reasoning="Question asks about portfolio composition or asset counts"
-            )
-        
-        # Priority 5: Pure geographic keywords (moved down so economic queries with locations are handled correctly)
-        if has_geographic:
-            return IntentClassification(
-                category=QueryCategory.GEOGRAPHIC_ASSETS,
-                confidence=0.90,
-                reasoning="Question refers to specific geographic locations"
-            )
-        
-        # Priority 6: Trend keywords
-        trend_keywords = ["trend", "change", "over time", "historical", "compare"]
-        if any(keyword in question_lower for keyword in trend_keywords):
-            return IntentClassification(
-                category=QueryCategory.TREND_ANALYSIS,
-                confidence=0.85,
-                reasoning="Question asks about trends or changes over time"
-            )
-        
-        return IntentClassification(
-            category=QueryCategory.UNKNOWN,
-            confidence=0.5,
-            reasoning="Could not classify query into known categories"
+        # Add conditional routing from intent classification
+        workflow.add_conditional_edges(
+            "classify_intent",
+            self._route_by_intent,
+            {
+                "portfolio_analysis": "portfolio_analysis",
+                "geographic_search": "geographic_search", 
+                "semantic_search": "semantic_search",
+                "economic_data": "economic_data",
+                "error": "handle_error"
+            }
         )
+        
+        # All processing nodes go to response formatting
+        workflow.add_edge("portfolio_analysis", "format_response")
+        workflow.add_edge("geographic_search", "format_response")
+        workflow.add_edge("semantic_search", "format_response")
+        workflow.add_edge("economic_data", "format_response")
+        workflow.add_edge("handle_error", "format_response")
+        
+        # End at format_response
+        workflow.set_finish_point("format_response")
+        
+        return workflow
     
-    async def execute_cypher_query(self, cypher: str, params: dict = None) -> List[Dict]:
+    async def _execute_cypher_query(self, cypher: str, params: dict = None) -> List[Dict]:
         """Execute Cypher query safely with parameters."""
         try:
             from .config import get_driver, Settings
@@ -421,572 +415,519 @@ class GraphRAG:
             print(f"Cypher execution error: {e}")
             return []
     
-    def _extract_asset_name(self, question: str) -> str:
-        """Extract asset name from similarity queries."""
-        question_lower = question.lower()
-        
-        # Known asset names
-        asset_names = [
-            "the independent", "innovation plaza", "the lot at formosa", 
-            "front & york", "centennial yards", "the adeline", "the view apartments",
-            "tribune tower", "terreva renewables", "aquamarine solar project",
-            "antelope valley water bank", "maryville carbon solutions"
-        ]
-        
-        # Look for asset names in the question
-        for asset in asset_names:
-            if asset in question_lower:
-                return asset.title()
-        
-        # Try to extract from patterns like "similar to X" or "like X"
-        import re
-        patterns = [
-            r"similar to (.+?)(?:\s|$)",
-            r"like (.+?)(?:\s|$)", 
-            r"comparable to (.+?)(?:\s|$)"
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, question_lower)
-            if match:
-                extracted = match.group(1).strip()
-                # Clean up common endings
-                extracted = re.sub(r'[.!?]$', '', extracted)
-                return extracted.title()
-        
-        return ""
-
-    def _extract_geographic_filter(self, question: str) -> dict:
-        """Extract geographic filters from a question."""
-        question_lower = question.lower()
-        filters = {}
-        
-        # Check for states
-        states = ["california", "texas", "illinois", "missouri", "wisconsin", "new york", "georgia", "arizona"]
-        for state in states:
-            if state in question_lower:
-                filters["state"] = state.title()
-                break
-        
-        # Check for cities
-        cities = ["los angeles", "houston", "austin", "chicago", "milwaukee", "appleton", "west hollywood", "atlanta", "new york", "phoenix"]
-        for city in cities:
-            if city in question_lower:
-                filters["city"] = city.title()
-                break
-        
-        # Check for regions
-        regions = ["west", "southwest", "midwest", "northeast", "southeast"]
-        for region in regions:
-            if region in question_lower:
-                filters["region"] = region.title()
-                break
-        
-        return filters
-
-    async def _vector_search_tool(self, question: str) -> str:
-        """Perform semantic vector search on asset descriptions."""
+    async def _classify_intent_node(self, state: AssetGraphState) -> AssetGraphState:
+        """Node: Classify user intent using keyword detection with priority."""
         try:
-            openai_key = os.getenv("OPENAI_API_KEY")
-            if not openai_key:
-                return "Vector search requires OpenAI API key to be configured."
+            question = state["question"]
+            steps = state.get("workflow_steps", [])
+            steps.append("classify_intent")
             
-            # Initialize OpenAI client
-            import openai
-            client = openai.OpenAI(api_key=openai_key)
-            
-            # Generate embedding for the query
-            response = client.embeddings.create(
-                model="text-embedding-3-small",
-                input=question.replace("\n", " "),
-                encoding_format="float"
-            )
-            query_embedding = response.data[0].embedding
-            
-            # Perform vector similarity search
-            vector_cypher = """
-            CALL db.index.vector.queryNodes('asset_description_vector', $limit, $query_embedding)
-            YIELD node, score
-            RETURN node.name AS asset_name,
-                   node.city AS city,
-                   node.state AS state,
-                   node.platform AS platform,
-                   node.building_type AS building_type,
-                   score AS similarity_score,
-                   node.property_description AS description
-            ORDER BY score DESC
-            """
-            
-            # Execute vector search using Neo4j driver
-            from .config import get_driver, Settings
-            settings = Settings()
-            driver = get_driver()
-            
-            async with driver.session(database=settings.neo4j_db) as session:
-                result = await session.run(vector_cypher, {
-                    "query_embedding": query_embedding,
-                    "limit": 5
-                })
-                data = await result.data()
-            
-            if data:
-                results = []
-                for item in data:
-                    results.append(f"{item['asset_name']} ({item['city']}, {item['state']}) - {item['building_type']} (similarity: {item['similarity_score']:.3f})")
-                
-                # Show all results found (no artificial limit)
-                return f"Found {len(data)} semantically similar assets: " + ", ".join(results)
-            else:
-                return "No semantically similar assets found."
-                
-        except Exception as e:
-            return f"Vector search error: {str(e)}"
-
-    async def answer_question(self, question: str) -> Dict[str, Any]:
-        """Main entry point for answering questions."""
-        
-        # Step 1: Classify intent
-        intent = await self.classify_intent(question)
-        
-        # Step 2: Route to appropriate handler
-        if intent.category == QueryCategory.SEMANTIC_SEARCH:
-            return await self._handle_semantic_query(question, intent)
-        elif intent.category == QueryCategory.GEOGRAPHIC_SEMANTIC_COMBINED:
-            return await self._handle_semantic_query(question, intent)
-        elif intent.category == QueryCategory.PORTFOLIO_ANALYSIS:
-            return await self._handle_portfolio_query(question, intent)
-        elif intent.category == QueryCategory.GEOGRAPHIC_ASSETS:
-            return await self._handle_geographic_query(question, intent)
-        elif intent.category == QueryCategory.ECONOMIC_DATA:
-            return await self._handle_economic_query(question, intent)
-        elif intent.category == QueryCategory.TREND_ANALYSIS:
-            return await self._handle_trend_query(question, intent)
-        else:
-            return await self._handle_general_query(question, intent)
-    
-    async def _handle_portfolio_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
-        """Handle portfolio analysis queries."""
-        try:
-            cypher, params = self.cypher_templates.generate_portfolio_query(question)
-            data = await self.execute_cypher_query(cypher, params)
-            
-            formatted_answer = self._format_portfolio_table(data)
-            
-            return {
-                "answer": formatted_answer,
-                "cypher": cypher.strip(),
-                "data": data,
-                "question": question,
-                "pattern_matched": True,
-                "query_type": "portfolio_template_generated",
-                "intent_classification": {
-                    "category": intent.category.value,
-                    "confidence": intent.confidence,
-                    "reasoning": intent.reasoning
-                },
-                "system_used": "graphrag",
-                "geospatial_enabled": True
-            }
-        except Exception as e:
-            return {
-                "answer": f"Portfolio query failed: {str(e)}",
-                "cypher": None,
-                "data": [],
-                "question": question,
-                "pattern_matched": False,
-                "error": str(e)
-            }
-    
-    async def _handle_geographic_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
-        """Handle geographic asset queries."""
-        try:
-            cypher, params = self.cypher_templates.generate_geographic_query(question)
-            data = await self.execute_cypher_query(cypher, params)
-            
-            # Use context-aware geographic answer formatting
-            formatted_answer = self._format_geographic_answer(data, question)
-            
-            return {
-                "answer": formatted_answer,
-                "cypher": cypher.strip(),
-                "data": data,
-                "question": question,
-                "pattern_matched": True,
-                "query_type": "geographic_template_generated",
-                "intent_classification": {
-                    "category": intent.category.value,
-                    "confidence": intent.confidence,
-                    "reasoning": intent.reasoning
-                },
-                "geospatial_enabled": True
-            }
-            
-        except Exception as e:
-            print(f"Geographic query error: {e}")
-            return await self._handle_general_query(question, intent)
-    
-    async def _handle_semantic_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
-        """Handle semantic search queries with optional geographic filtering."""
-        try:
             question_lower = question.lower()
             
-            # Extract geographic filters if present
-            geo_filters = self._extract_geographic_filter(question)
+            # Check for COMBINED geographic + semantic queries FIRST
+            semantic_keywords = ["sustainable", "esg", "renewable", "green", "luxury", "premium", "high-end", "environmental", "carbon", "solar", "energy", "eco-friendly", "similar to", "like", "comparable"]
+            geographic_keywords = ["california", "texas", "los angeles", "houston", "austin", "properties in", "assets in", "located in", "chicago", "milwaukee", "wisconsin", "missouri"]
             
-            # Check if this is an asset similarity query
-            if "similar to" in question_lower or "like" in question_lower or "comparable" in question_lower:
-                # Extract asset name from query
-                asset_name = self._extract_asset_name(question)
-                if asset_name:
-                    # Find similar assets using vector search with the asset name as seed
-                    vector_result = await self._vector_search_tool(f"Properties like {asset_name} mixed use development")
-                else:
-                    # Fallback to general similarity search
-                    vector_result = await self._vector_search_tool(question)
+            has_semantic = any(keyword.lower() in question_lower for keyword in semantic_keywords)
+            has_geographic = any(keyword in question_lower for keyword in geographic_keywords)
+            
+            if has_semantic and has_geographic:
+                intent = IntentClassification(
+                    category=QueryCategory.GEOGRAPHIC_SEMANTIC_COMBINED,
+                    confidence=0.98,
+                    reasoning="Question combines geographic filtering with semantic search criteria"
+                )
+            elif has_semantic:
+                intent = IntentClassification(
+                    category=QueryCategory.SEMANTIC_SEARCH,
+                    confidence=0.95,
+                    reasoning=f"Contains semantic keywords requiring vector search"
+                )
+            elif any(keyword in question_lower for keyword in ["unemployment", "interest rate", "mortgage", "federal funds", "economic", "rate"]):
+                intent = IntentClassification(
+                    category=QueryCategory.ECONOMIC_DATA,
+                    confidence=0.90,
+                    reasoning="Question asks about economic indicators"
+                )
+            elif any(keyword in question_lower for keyword in ["portfolio", "distribution", "how many", "count", "platform", "breakdown"]):
+                intent = IntentClassification(
+                    category=QueryCategory.PORTFOLIO_ANALYSIS,
+                    confidence=0.95,
+                    reasoning="Question asks about portfolio composition or asset counts"
+                )
+            elif has_geographic:
+                intent = IntentClassification(
+                    category=QueryCategory.GEOGRAPHIC_ASSETS,
+                    confidence=0.90,
+                    reasoning="Question refers to specific geographic locations"
+                )
+            elif any(keyword in question_lower for keyword in ["trend", "change", "over time", "historical", "compare"]):
+                intent = IntentClassification(
+                    category=QueryCategory.TREND_ANALYSIS,
+                    confidence=0.85,
+                    reasoning="Question asks about trends or changes over time"
+                )
             else:
-                # Build semantic search query with geographic constraints
-                if geo_filters:
-                    # For geographic + semantic queries, use vector search with geographic post-filtering
-                    vector_result = await self._vector_search_tool(question)
+                intent = IntentClassification(
+                    category=QueryCategory.UNKNOWN,
+                    confidence=0.5,
+                    reasoning="Could not classify query into known categories"
+                )
+            
+            return {
+                **state,
+                "intent": intent,
+                "workflow_steps": steps
+            }
+            
+        except Exception as e:
+            error_messages = state.get("error_messages", [])
+            error_messages.append(f"Intent classification error: {str(e)}")
+            return {
+                **state,
+                "intent": IntentClassification(
+                    category=QueryCategory.UNKNOWN,
+                    confidence=0.0,
+                    reasoning=f"Classification failed: {str(e)}"
+                ),
+                "workflow_steps": steps,
+                "error_messages": error_messages
+            }
+    
+    def _route_by_intent(self, state: AssetGraphState) -> str:
+        """Route to appropriate processing node based on intent"""
+        intent = state.get("intent")
+        if not intent:
+            return "error"
+        
+        if intent.category == QueryCategory.PORTFOLIO_ANALYSIS:
+            return "portfolio_analysis"
+        elif intent.category in [QueryCategory.GEOGRAPHIC_ASSETS, QueryCategory.GEOGRAPHIC_SEMANTIC_COMBINED]:
+            return "geographic_search"
+        elif intent.category == QueryCategory.SEMANTIC_SEARCH:
+            return "semantic_search"
+        elif intent.category == QueryCategory.ECONOMIC_DATA:
+            return "economic_data"
+        else:
+            return "error" 
+
+    async def _portfolio_analysis_node(self, state: AssetGraphState) -> AssetGraphState:
+        """Node: Handle portfolio analysis queries"""
+        try:
+            question = state["question"]
+            steps = state.get("workflow_steps", [])
+            steps.append("portfolio_analysis")
+            
+            # Generate query using existing template logic
+            cypher, params = self.cypher_templates.generate_portfolio_query(question)
+            
+            # Execute query
+            data = await self._execute_cypher_query(cypher, params)
+            
+            return {
+                **state,
+                "cypher_query": cypher,
+                "cypher_params": params,
+                "raw_data": data,
+                "formatted_data": data,  # Ensure formatted_data is set
+                "query_type": "portfolio_template_generated",
+                "pattern_matched": True,
+                "workflow_steps": steps
+            }
+            
+        except Exception as e:
+            error_messages = state.get("error_messages", [])
+            error_messages.append(f"Portfolio analysis error: {str(e)}")
+            return {
+                **state,
+                "workflow_steps": steps,
+                "error_messages": error_messages,
+                "pattern_matched": False
+            }
+
+    async def _geographic_search_node(self, state: AssetGraphState) -> AssetGraphState:
+        """Node: Handle geographic search queries including combined semantic+geographic"""
+        try:
+            question = state["question"]
+            intent = state.get("intent")
+            steps = state.get("workflow_steps", [])
+            steps.append("geographic_search")
+            
+            # Handle combined geographic + semantic queries with PROPER vector search
+            if intent and intent.category == QueryCategory.GEOGRAPHIC_SEMANTIC_COMBINED:
+                try:
+                    # Extract location from question
+                    question_lower = question.lower()
+                    location_state = None
+                    location_city = None
                     
-                    # Parse vector results and apply geographic filtering
-                    if "Found" in vector_result and "semantically similar" in vector_result:
-                        vector_data = self._parse_vector_search_results(vector_result)
-                        
-                        # Apply geographic filter to vector results
-                        if vector_data:
-                            filtered_data = self._apply_geographic_filter(vector_data, geo_filters)
-                            
-                            if filtered_data:
-                                answer = f"Found {len(filtered_data)} assets matching your criteria:"
-                                for asset in filtered_data:
-                                    answer += f"\n• {asset['name']} ({asset['city']}, {asset['state']}) - {asset['building_type']}"
-                                
-                                return {
-                                    "answer": answer,
-                                    "cypher": "Vector search with geographic filtering",
-                                    "data": filtered_data,
-                                    "question": question,
-                                    "pattern_matched": True,
-                                    "query_type": "geographic_semantic_vector_search",
-                                    "geographic_filters": geo_filters,
-                                    "intent_classification": {
-                                        "category": intent.category.value,
-                                        "confidence": intent.confidence,
-                                        "reasoning": intent.reasoning
-                                    },
-                                    "system_used": "graphrag",
-                                    "geospatial_enabled": True
-                                }
-                            else:
-                                # No results after geographic filtering
-                                geo_desc = ""
-                                if "state" in geo_filters:
-                                    geo_desc = f"in {geo_filters['state']}"
-                                elif "city" in geo_filters:
-                                    geo_desc = f"in {geo_filters['city']}"
-                                elif "region" in geo_filters:
-                                    geo_desc = f"in the {geo_filters['region']} region"
-                                
-                                answer = f"No assets found matching your criteria {geo_desc}. Found semantically similar assets in other locations, but none in the specified geographic area."
-                                return {
-                                    "answer": answer,
-                                    "cypher": "Vector search with geographic filtering (no results)",
-                                    "data": [],
-                                    "question": question,
-                                    "pattern_matched": True,
-                                    "query_type": "geographic_semantic_search_no_results",
-                                    "geographic_filters": geo_filters,
-                                    "intent_classification": {
-                                        "category": intent.category.value,
-                                        "confidence": intent.confidence,
-                                        "reasoning": intent.reasoning
-                                    },
-                                    "system_used": "graphrag",
-                                    "geospatial_enabled": True
-                                }
+                    if "california" in question_lower:
+                        location_state = "California"
+                    elif "texas" in question_lower:
+                        location_state = "Texas"
+                    elif "los angeles" in question_lower:
+                        location_city = "Los Angeles"
+                        location_state = "California"
                     
-                    # Vector search failed - fall back to geographic search only
-                    cypher, params = self.cypher_templates.generate_geographic_query(question)
-                    data = await self.execute_cypher_query(cypher, params)
+                    # Use vector search for semantic matching, then filter by location
+                    import openai
+                    
+                    # Get embeddings for the semantic part of the question
+                    client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                    embedding_response = await client.embeddings.create(
+                        model="text-embedding-ada-002",
+                        input=question
+                    )
+                    query_embedding = embedding_response.data[0].embedding
+                    
+                    # Search for semantically similar assets, then filter by location
+                    if location_state and location_city:
+                        cypher = """
+                        CALL db.index.vector.queryNodes('asset_description_vector', 10, $embedding) 
+                        YIELD node AS asset, score
+                        WHERE asset.state = $state AND asset.city = $city
+                        RETURN asset.name AS name, 
+                               asset.city + ', ' + asset.state AS location,
+                               asset.building_type AS type,
+                               asset.platform AS platform,
+                               score
+                        ORDER BY score DESC
+                        LIMIT 5
+                        """
+                        params = {"embedding": query_embedding, "state": location_state, "city": location_city}
+                    elif location_state:
+                        cypher = """
+                        CALL db.index.vector.queryNodes('asset_description_vector', 10, $embedding) 
+                        YIELD node AS asset, score
+                        WHERE asset.state = $state
+                        RETURN asset.name AS name, 
+                               asset.city + ', ' + asset.state AS location,
+                               asset.building_type AS type,
+                               asset.platform AS platform,
+                               score
+                        ORDER BY score DESC
+                        LIMIT 5
+                        """
+                        params = {"embedding": query_embedding, "state": location_state}
+                    else:
+                        # No location specified, just do semantic search
+                        cypher = """
+                        CALL db.index.vector.queryNodes('asset_description_vector', 5, $embedding) 
+                        YIELD node AS asset, score
+                        RETURN asset.name AS name, 
+                               asset.city + ', ' + asset.state AS location,
+                               asset.building_type AS type,
+                               asset.platform AS platform,
+                               score
+                        ORDER BY score DESC
+                        """
+                        params = {"embedding": query_embedding}
+                    
+                    data = await self._execute_cypher_query(cypher, params)
                     
                     if data:
-                        answer = f"Found {len(data)} assets in the specified location (semantic search unavailable):"
-                        answer = self._format_asset_table(data)
+                        asset_list = []
+                        for record in data:
+                            asset_list.append(f"• {record['name']} ({record['location']}) - {record['type']} (similarity: {record['score']:.3f})")
+                        answer = f"Found {len(data)} assets matching your criteria:\n" + "\n".join(asset_list)
                     else:
-                        answer = f"No assets found in the specified location."
+                        # More accurate response since we actually searched
+                        if location_state:
+                            answer = f"No assets in {location_state} match the semantic criteria '{question}'"
+                        else:
+                            answer = "No assets found matching the combined geographic and semantic criteria."
                     
                     return {
+                        **state,
+                        "cypher_query": "Vector similarity search with geographic filtering",
+                        "cypher_params": params,
+                        "raw_data": data,
+                        "formatted_data": data,  # Ensure formatted_data is set
                         "answer": answer,
-                        "cypher": cypher.strip(),
-                        "data": data,
-                        "question": question,
-                        "pattern_matched": True,
-                        "query_type": "geographic_fallback_search",
-                        "geographic_filters": geo_filters,
-                        "intent_classification": {
-                            "category": intent.category.value,
-                            "confidence": intent.confidence,
-                            "reasoning": intent.reasoning
-                        },
-                        "system_used": "graphrag",
-                        "geospatial_enabled": True
+                        "query_type": "geographic_semantic_combined_vector",
+                        "pattern_matched": bool(data),
+                        "workflow_steps": steps
                     }
-                else:
-                    # No geographic constraints - use vector search
-                    vector_result = await self._vector_search_tool(question)
-            
-            # Fallback to template-based semantic search if no geographic constraints
-            if not geo_filters:
-                # For pure semantic searches, use vector search primarily
-                vector_result = await self._vector_search_tool(question)
-                
-                # Parse vector search results for table data if successful
-                if "Found" in vector_result and "semantically similar" in vector_result:
-                    # Extract asset information from vector search results
-                    vector_data = self._parse_vector_search_results(vector_result)
                     
-                    # If parsing worked, use vector data
-                    if vector_data:
-                        answer = vector_result
-                        data = vector_data
-                        cypher_query = "Vector similarity search using embeddings"
-                    else:
-                        # Parsing failed - fall back to template search
-                        print("Vector search parsing failed, falling back to template search")
-                        cypher, params = self.cypher_templates.generate_semantic_query(question)
-                        backup_data = await self.execute_cypher_query(cypher, params)
-                        
-                        if backup_data:
-                            answer = self._format_asset_table(backup_data)
-                            data = backup_data
-                            cypher_query = cypher.strip()
-                        else:
-                            answer = "No assets found matching your semantic search criteria."
-                            data = []
-                            cypher_query = cypher.strip() if 'cypher' in locals() else ""
+                except Exception as combined_error:
+                    error_messages = state.get("error_messages", [])
+                    error_messages.append(f"Combined search error: {str(combined_error)}")
+                    return {
+                        **state,
+                        "workflow_steps": steps,
+                        "error_messages": error_messages,
+                        "pattern_matched": False,
+                        "raw_data": [],
+                        "formatted_data": []
+                    }
+            else:
+                # Regular geographic query
+                cypher, params = self.cypher_templates.generate_geographic_query(question)
+                data = await self._execute_cypher_query(cypher, params)
                 
                 return {
-                    "answer": answer,
-                    "cypher": cypher_query,
-                    "data": data,
-                    "question": question,
+                    **state,
+                    "cypher_query": cypher,
+                    "cypher_params": params,
+                    "raw_data": data,
+                    "formatted_data": data,  # Ensure formatted_data is set
+                    "query_type": "geographic_template_generated",
                     "pattern_matched": True,
-                    "query_type": "semantic_vector_search",
-                    "vector_search": True,
-                    "intent_classification": {
-                        "category": intent.category.value,
-                        "confidence": intent.confidence,
-                        "reasoning": intent.reasoning
-                    },
-                    "system_used": "graphrag",
-                    "geospatial_enabled": True
+                    "workflow_steps": steps
                 }
+                
+        except Exception as e:
+            error_messages = state.get("error_messages", [])
+            error_messages.append(f"Geographic search error: {str(e)}")
+            return {
+                **state,
+                "workflow_steps": steps,
+                "error_messages": error_messages,
+                "pattern_matched": False,
+                "raw_data": [],
+                "formatted_data": []
+            }
+
+    async def _semantic_search_node(self, state: AssetGraphState) -> AssetGraphState:
+        """Node: Handle semantic search queries using vector search"""
+        try:
+            question = state["question"]
+            steps = state.get("workflow_steps", [])
+            steps.append("semantic_search")
+            
+            # Use vector search for semantic queries
+            import openai
+            
+            # Get embeddings for the question
+            client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            embedding_response = await client.embeddings.create(
+                model="text-embedding-ada-002",
+                input=question
+            )
+            query_embedding = embedding_response.data[0].embedding
+            
+            # Use vector similarity search
+            cypher = """
+            CALL db.index.vector.queryNodes('asset_description_vector', 5, $embedding) 
+            YIELD node AS asset, score
+            RETURN asset.name AS name, 
+                   asset.city + ', ' + asset.state AS location,
+                   asset.building_type AS type,
+                   asset.platform AS platform,
+                   score
+            ORDER BY score DESC
+            """
+            params = {"embedding": query_embedding}
+            
+            data = await self._execute_cypher_query(cypher, params)
+            
+            if data:
+                asset_list = []
+                for record in data:
+                    asset_list.append(f"• {record['name']} ({record['location']}) - {record['type']} (similarity: {record['score']:.3f})")
+                answer = f"Found {len(data)} semantically similar assets:\n" + "\n".join(asset_list)
+            else:
+                answer = "No semantically similar assets found."
+            
+            return {
+                **state,
+                "cypher_query": "Vector similarity search",
+                "cypher_params": params,
+                "raw_data": data,
+                "formatted_data": data,  # Ensure formatted_data is set
+                "answer": answer,
+                "query_type": "semantic_vector_search",
+                "pattern_matched": bool(data),
+                "workflow_steps": steps
+            }
+            
+        except Exception as e:
+            error_messages = state.get("error_messages", [])
+            error_messages.append(f"Semantic search error: {str(e)}")
+            return {
+                **state,
+                "workflow_steps": steps,
+                "error_messages": error_messages,
+                "pattern_matched": False,
+                "raw_data": [],
+                "formatted_data": [],
+                "answer": "Error in semantic search",
+                "query_type": "semantic_search_error"
+            } 
+
+    async def _economic_data_node(self, state: AssetGraphState) -> AssetGraphState:
+        """Node: Handle economic data queries"""
+        try:
+            question = state["question"]
+            steps = state.get("workflow_steps", [])
+            steps.append("economic_data")
+            
+            # Generate query using existing template logic
+            cypher, params = self.cypher_templates.generate_economic_query(question)
+            
+            # Execute query
+            data = await self._execute_cypher_query(cypher, params)
+            
+            return {
+                **state,
+                "cypher_query": cypher,
+                "cypher_params": params,
+                "raw_data": data,
+                "formatted_data": data,  # Ensure formatted_data is set
+                "query_type": "economic_template_generated",
+                "pattern_matched": True,
+                "workflow_steps": steps
+            }
+            
+        except Exception as e:
+            error_messages = state.get("error_messages", [])
+            error_messages.append(f"Economic data error: {str(e)}")
+            return {
+                **state,
+                "workflow_steps": steps,
+                "error_messages": error_messages,
+                "pattern_matched": False
+            }
+    
+    async def _handle_error_node(self, state: AssetGraphState) -> AssetGraphState:
+        """Node: Handle errors gracefully"""
+        steps = state.get("workflow_steps", [])
+        steps.append("handle_error")
+        
+        # Provide helpful error response
+        return {
+            **state,
+            "answer": "I couldn't process that question. Try asking about portfolio distribution, assets in specific locations, or economic indicators.",
+            "raw_data": [],
+            "formatted_data": [],  # Ensure formatted_data is set
+            "query_type": "error_fallback",
+            "pattern_matched": False,
+            "workflow_steps": steps
+        }
+    
+    async def _format_response_node(self, state: AssetGraphState) -> AssetGraphState:
+        """Node: Format the final response"""
+        try:
+            steps = state.get("workflow_steps", [])
+            steps.append("format_response")
+            
+            # If answer is already set (from semantic search), use it
+            if state.get("answer"):
+                return {
+                    **state,
+                    "workflow_steps": steps
+                }
+            
+            # Otherwise format based on data and query type
+            data = state.get("raw_data", [])
+            query_type = state.get("query_type", "")
+            question = state.get("question", "")
+            
+            # Serialize Neo4j types before formatting to prevent errors
+            from api.main import serialize_neo4j_types
+            serialized_data = serialize_neo4j_types(data)
+            
+            # Use formatting logic
+            if "portfolio" in query_type:
+                answer = self._format_portfolio_table(serialized_data)
+            elif "geographic" in query_type:
+                answer = self._format_geographic_answer(serialized_data, question)
+            elif "economic" in query_type:
+                answer = self._format_economic_data(serialized_data)
+            else:
+                answer = self._format_asset_table(serialized_data)
+            
+            return {
+                **state,
+                "answer": answer,
+                "formatted_data": serialized_data,
+                "workflow_steps": steps
+            }
+            
+        except Exception as e:
+            error_messages = state.get("error_messages", [])
+            error_messages.append(f"Response formatting error: {str(e)}")
+            return {
+                **state,
+                "answer": f"Error formatting response: {str(e)}",
+                "workflow_steps": steps,
+                "error_messages": error_messages
+            }
+    
+    async def answer_question(self, question: str) -> Dict[str, Any]:
+        """Main entry point for answering questions using LangGraph workflow"""
+        try:
+            # Compile workflow if not already done
+            if not hasattr(self, '_compiled_workflow'):
+                self._compiled_workflow = self.workflow.compile()
+            
+            # Initialize state
+            initial_state = AssetGraphState(
+                question=question,
+                intent=None,
+                cypher_query=None,
+                cypher_params=None,
+                raw_data=None,
+                answer="",
+                formatted_data=None,
+                workflow_steps=[],
+                error_messages=[],
+                query_type="",
+                pattern_matched=False
+            )
+            
+            # Execute workflow
+            final_state = await self._compiled_workflow.ainvoke(initial_state)
+            
+            # Return in expected format
+            intent = final_state.get("intent")
+            
+            # Ensure data field is properly set - prefer formatted_data, fallback to raw_data, ensure it's not None
+            data = final_state.get("formatted_data") or final_state.get("raw_data") or []
+            
+            return {
+                "answer": final_state.get("answer", "No answer generated"),
+                "cypher": final_state.get("cypher_query", ""),
+                "data": data,
+                "question": question,
+                "pattern_matched": final_state.get("pattern_matched", False),
+                "query_type": final_state.get("query_type", "unknown"),
+                "workflow_steps": final_state.get("workflow_steps", []),
+                "intent_classification": {
+                    "category": intent.category.value if intent and hasattr(intent.category, 'value') else (intent.category if intent else "unknown"),
+                    "confidence": intent.confidence if intent else 0.0,
+                    "reasoning": intent.reasoning if intent else "No intent classification"
+                },
+                "system_used": "langgraph",
+                "geospatial_enabled": True
+            }
             
         except Exception as e:
             return {
-                "answer": f"Semantic search failed: {str(e)}",
+                "answer": f"Workflow execution failed: {str(e)}",
                 "cypher": None,
                 "data": [],
                 "question": question,
                 "pattern_matched": False,
                 "error": str(e),
-                "vector_search": False
-            }
-
-    def _parse_vector_search_results(self, vector_result: str) -> List[Dict]:
-        """Parse vector search results text into structured data for table display."""
-        try:
-            # The vector result format is like:
-            # "Found 5 semantically similar assets: Terreva Renewables (Appleton, Wisconsin) - Energy Infrastructure (similarity: 0.747), Aquamarine Solar Project (San Joaquin Valley, California) - Energy Infrastructure (similarity: 0.744), Maryville Carbon Solutions (Maryville, Missouri) - Environmental Infrastructure (similarity: 0.656)"
-            
-            import re
-            
-            # First extract the part after "Found X semantically similar assets:"
-            start_match = re.search(r'Found \d+ semantically similar assets:\s*(.+)', vector_result)
-            if not start_match:
-                return []
-            
-            assets_text = start_match.group(1)
-            
-            # Use a comprehensive regex to find all asset patterns in the text
-            # Pattern: Asset Name (City, State) - Building Type (similarity: X.XXX)
-            asset_pattern = r'([A-Za-z\s&\'-]+?)\s*\(([^)]+)\)\s*-\s*([^(]+?)\s*\(similarity:\s*([0-9.]+)\)'
-            matches = re.findall(asset_pattern, assets_text)
-            
-            parsed_data = []
-            for match in matches:
-                name = match[0].strip()
-                location = match[1].strip()
-                building_type = match[2].strip()
-                similarity_score = float(match[3])
-                
-                # Clean up any leading punctuation from name
-                name = re.sub(r'^[,\s]+', '', name)
-                
-                # Split location into city, state
-                location_parts = location.split(', ')
-                city = location_parts[0] if location_parts else ''
-                state = location_parts[1] if len(location_parts) > 1 else ''
-                
-                parsed_data.append({
-                    'name': name,
-                    'city': city,
-                    'state': state,
-                    'building_type': building_type,
-                    'platform': 'Infrastructure',  # Default assumption based on data
-                    'similarity_score': similarity_score
-                })
-            
-            return parsed_data
-            
-        except Exception as e:
-            # If regex parsing fails, return empty list for fallback handling
-            return []
-
-    def _apply_geographic_filter(self, data: List[Dict], geo_filters: dict) -> List[Dict]:
-        """Apply geographic filters to a list of asset dictionaries."""
-        if not geo_filters:
-            return data
-        
-        filtered_data = []
-        
-        for asset in data:
-            asset_matches = False
-            
-            # Check state filter (highest priority)
-            if "state" in geo_filters:
-                asset_state = asset.get('state', '').lower()
-                if asset_state == geo_filters['state'].lower():
-                    asset_matches = True
-            
-            # Check city filter (if no state filter or state matches)
-            elif "city" in geo_filters:
-                asset_city = asset.get('city', '').lower()
-                if asset_city == geo_filters['city'].lower():
-                    asset_matches = True
-            
-            # Check region filter (if no state/city filter or they match)
-            elif "region" in geo_filters:
-                # For region filtering, we need to check state-to-region mapping
-                asset_state = asset.get('state', '')
-                if asset_state in self.cypher_templates.state_regions:
-                    asset_region = self.cypher_templates.state_regions[asset_state]
-                    if asset_region.lower() == geo_filters['region'].lower():
-                        asset_matches = True
-            
-            if asset_matches:
-                filtered_data.append(asset)
-        
-        return filtered_data
-
-    async def _handle_economic_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
-        """Handle economic data queries."""
-        try:
-            cypher, params = self.cypher_templates.generate_economic_query(question)
-            data = await self.execute_cypher_query(cypher, params)
-            
-            formatted_answer = self._format_economic_data(data)
-            
-            return {
-                "answer": formatted_answer,
-                "cypher": cypher.strip(),
-                "data": data,
-                "question": question,
-                "pattern_matched": True,
-                "query_type": "economic_template_generated",
-                "intent_classification": {
-                    "category": intent.category.value,
-                    "confidence": intent.confidence,
-                    "reasoning": intent.reasoning
-                },
-                "system_used": "graphrag",
-                "geospatial_enabled": True
-            }
-        except Exception as e:
-            return {
-                "answer": f"Economic query failed: {str(e)}",
-                "cypher": None,
-                "data": [],
-                "question": question,
-                "pattern_matched": False,
-                "error": str(e)
+                "system_used": "langgraph",
+                "workflow_steps": ["error"]
             }
     
-    async def _handle_trend_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
-        """Handle trend analysis queries."""
+    def generate_workflow_diagram(self, output_path: str = "docs/workflows/langgraph_workflow.png"):
+        """Generate automatic workflow diagram"""
         try:
-            cypher, params = self.cypher_templates.generate_economic_query(question)  # Use economic templates for trends
-            data = await self.execute_cypher_query(cypher, params)
+            if not hasattr(self, '_compiled_workflow'):
+                self._compiled_workflow = self.workflow.compile()
             
-            if data:
-                formatted_answer = self._format_economic_data(data)
-            else:
-                formatted_answer = f"Trend analysis for: {question}"
-            
-            return {
-                "answer": formatted_answer,
-                "cypher": cypher.strip(),
-                "data": data,
-                "question": question,
-                "pattern_matched": True,
-                "query_type": "trend_template_generated",
-                "intent_classification": {
-                    "category": intent.category.value,
-                    "confidence": intent.confidence,
-                    "reasoning": intent.reasoning
-                },
-                "system_used": "graphrag",
-                "geospatial_enabled": True
-            }
+            # Generate mermaid diagram
+            self._compiled_workflow.get_graph().draw_mermaid_png(output_file_path=output_path)
+            print(f"✅ LangGraph workflow diagram generated: {output_path}")
             
         except Exception as e:
-            return {
-                "answer": f"Trend analysis failed: {str(e)}",
-                "cypher": None,
-                "data": [],
-                "question": question,
-                "pattern_matched": False,
-                "error": str(e)
-            }
-    
-    async def _handle_general_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
-        """Handle general queries with fallback logic."""
-        try:
-            # Try portfolio query as fallback
-            cypher, params = self.cypher_templates.generate_portfolio_query(question)
-            data = await self.execute_cypher_query(cypher, params)
-            
-            if data:
-                formatted_answer = self._format_portfolio_table(data)
-            else:
-                formatted_answer = "I couldn't find specific information for that question. Try asking about portfolio distribution, assets in specific locations, or economic indicators."
-            
-            return {
-                "answer": formatted_answer,
-                "cypher": cypher.strip() if data else "",
-                "data": data,
-                "question": question,
-                "pattern_matched": False,
-                "query_type": "general_fallback",
-                "intent_classification": {
-                    "category": intent.category.value,
-                    "confidence": intent.confidence,
-                    "reasoning": intent.reasoning
-                },
-                "system_used": "graphrag",
-                "geospatial_enabled": True
-            }
-        except Exception as e:
-            return {
-                "answer": f"I couldn't process that question: {str(e)}. Try rephrasing or asking about assets, economic data, or portfolio information.",
-                "cypher": None,
-                "data": [],
-                "question": question,
-                "pattern_matched": False,
-                "error": str(e)
-            }
+            print(f"❌ Failed to generate workflow diagram: {e}")
 
+    # Formatting methods from original implementation
     def _format_portfolio_table(self, data: List[Dict]) -> str:
         """Format portfolio data as a clean table with columns."""
         if not data:
@@ -1188,4 +1129,4 @@ class GraphRAG:
 # Factory function for easy instantiation
 async def create_graphrag() -> GraphRAG:
     """Create a GraphRAG instance with proper initialization."""
-    return GraphRAG()
+    return GraphRAG() 

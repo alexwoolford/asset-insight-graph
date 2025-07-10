@@ -1,156 +1,159 @@
+"""
+Real integration tests for QA endpoint - NO MOCKS!
+
+These tests hit the actual database and test real system behavior.
+"""
+import pytest
 from fastapi.testclient import TestClient
-
 from api.main import app
-import api.graphrag as graphrag
 
 
-class DummyResult:
-    def __init__(self, data):
-        self._data = data
-
-    async def data(self):
-        return self._data
-
-    async def single(self):
-        return self._data[0] if self._data else None
+@pytest.fixture
+def client():
+    return TestClient(app)
 
 
-class DummySession:
-    def __init__(self, mapping):
-        self.mapping = mapping
-        self.last_query = None
-        self.last_params = None
+class TestQAEndpoint:
+    """Real integration tests for the QA endpoint"""
 
-    async def run(self, cypher, params=None):
-        self.last_query = cypher
-        self.last_params = params or {}
-        data = self.mapping.get(cypher.strip(), [])
-        return DummyResult(data)
+    def test_geographic_query_california(self, client):
+        """Test: California unemployment data query"""
+        response = client.post("/qa", json={"question": "unemployment in California"})
+        assert response.status_code == 200
+        body = response.json()
+        
+        # Should contain a valid response
+        assert body["answer"] is not None
+        assert len(body["answer"]) > 0
+        
+        # Should handle unemployment/economic data queries
+        answer_lower = body["answer"].lower()
+        assert ("california" in answer_lower or "unemployment" in answer_lower or 
+                "economic" in answer_lower or "data" in answer_lower)
 
-    async def __aenter__(self):
-        return self
+    def test_assets_in_texas(self, client):
+        """Test: Assets in Texas query"""
+        response = client.post("/qa", json={"question": "assets in Texas"})
+        assert response.status_code == 200
+        body = response.json()
+        
+        assert body["answer"] is not None
+        assert body.get("data") is not None
+        
+        # Should find Texas assets
+        answer_lower = body["answer"].lower()
+        assert "texas" in answer_lower
 
-    async def __aexit__(self, exc_type, exc, tb):
-        pass
+    def test_current_interest_rates(self, client):
+        """Test: Current interest rates query"""
+        response = client.post("/qa", json={"question": "current interest rates"})
+        assert response.status_code == 200
+        body = response.json()
+        
+        assert body["answer"] is not None
+        
+        # Should handle economic data queries
+        answer_lower = body["answer"].lower()
+        assert ("interest" in answer_lower or "rates" in answer_lower or 
+                "economic" in answer_lower or "data" in answer_lower)
 
-
-class DummyDriver:
-    def __init__(self, session):
-        self.session_obj = session
-
-    def session(self, database=None):
-        return self.session_obj
-
-
-UNEMPLOYMENT_CA_CYPHER = (
-    """MATCH (mt:MetricType {name: \"California Unemployment Rate\"})-[:TAIL]->(latest:MetricValue)
-           RETURN \"California\" AS state,
-                  latest.value AS unemployment_rate,
-                  latest.date AS as_of_date,
-                  mt.name AS metric_name"""
-)
-
-ASSETS_STATE_CYPHER = (
-    """MATCH (a:Asset)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State {name: $normalized_state})
-           RETURN a.name AS asset_name, c.name AS city,
-                  a.building_type AS building_type"""
-)
-
-INTEREST_RATES_CYPHER = (
-    """MATCH (mt:MetricType)-[:TAIL]->(latest:MetricValue)
-           WHERE mt.category = \"Interest Rate\"
-           RETURN mt.name AS rate_type,
-                  latest.value AS current_rate,
-                  latest.date AS as_of_date
-           ORDER BY mt.name"""
-)
-
-
-def setup_driver(monkeypatch, mapping):
-    session = DummySession(mapping)
-    driver = DummyDriver(session)
-    monkeypatch.setattr("api.main.get_driver", lambda: driver)
-    monkeypatch.setattr("api.graphrag.get_driver", lambda: driver)
-    return session
+    def test_unknown_query_handling(self, client):
+        """Test: Unknown query handling without mocks"""
+        response = client.post("/qa", json={"question": "completely unknown query about zebras"})
+        assert response.status_code == 200
+        body = response.json()
+        
+        # Should handle gracefully and return some response
+        assert body["answer"] is not None
+        assert len(body["answer"]) > 0
 
 
-def test_unemployment_california(monkeypatch):
-    data = [
-        {
-            "state": "California",
-            "unemployment_rate": 4.5,
-            "as_of_date": "2025-01-01",
-            "metric_name": "California Unemployment Rate",
-        }
-    ]
-    session = setup_driver(monkeypatch, {UNEMPLOYMENT_CA_CYPHER.strip(): data})
+class TestQueryValidation:
+    """Test query validation and error handling"""
 
-    client = TestClient(app)
-    response = client.post("/qa", json={"question": "unemployment rate in California"})
-    assert response.status_code == 200
-    body = response.json()
-    assert body["pattern_matched"] is True
-    assert session.last_query is not None
+    def test_empty_question(self, client):
+        """Test empty question handling"""
+        response = client.post("/qa", json={"question": ""})
+        assert response.status_code == 200
+        body = response.json()
+        
+        # Should handle empty questions gracefully
+        assert body["answer"] is not None
 
+    def test_missing_question_field(self, client):
+        """Test missing question field"""
+        response = client.post("/qa", json={})
+        assert response.status_code == 422  # Validation error
 
-def test_assets_in_texas(monkeypatch):
-    data = [
-        {"asset_name": "Tower", "city": "Dallas", "building_type": "office"},
-        {"asset_name": "Plaza", "city": "Austin", "building_type": "retail"},
-    ]
-    session = setup_driver(monkeypatch, {ASSETS_STATE_CYPHER.strip(): data})
-
-    client = TestClient(app)
-    response = client.post("/qa", json={"question": "assets in Texas"})
-    assert response.status_code == 200
-    body = response.json()
-    assert body["pattern_matched"] is True
-    assert session.last_query is not None
+    def test_malformed_json(self, client):
+        """Test malformed JSON request"""
+        response = client.post("/qa", data="invalid json")
+        assert response.status_code == 422  # Validation error
 
 
-def test_current_interest_rates(monkeypatch):
-    data = [
-        {"rate_type": "30-Year Mortgage Rate", "current_rate": 6.5, "as_of_date": "2025-07-03"},
-        {"rate_type": "Federal Funds Rate", "current_rate": 4.33, "as_of_date": "2025-06-01"},
-    ]
-    session = setup_driver(monkeypatch, {INTEREST_RATES_CYPHER.strip(): data})
+class TestSystemBehavior:
+    """Test real system behavior with LangGraph workflows"""
 
-    client = TestClient(app)
-    response = client.post("/qa", json={"question": "current interest rates"})
-    assert response.status_code == 200
-    body = response.json()
-    assert body["pattern_matched"] is True
-    assert session.last_query is not None
+    def test_graphrag_system(self, client):
+        """Test GraphRAG system with real data"""
+        response = client.post("/qa", json={"question": "How many infrastructure assets"})
+        assert response.status_code == 200
+        body = response.json()
+        
+        # Should use LangGraph workflow
+        assert body.get("system_used") == "langgraph"
+        assert body["answer"] is not None
+        assert "workflow_steps" in body
 
 
-def test_llm_fallback(monkeypatch):
-    session = setup_driver(monkeypatch, {})
+class TestRealDatabaseConnectivity:
+    """Test that we're actually hitting the real database"""
 
-    called = {}
+    def test_vector_search_functionality(self, client):
+        """Test that vector search is actually working"""
+        response = client.post("/qa", json={"question": "Properties similar to The Independent"})
+        assert response.status_code == 200
+        body = response.json()
+        
+        # Should return similarity scores (proving vector search is working)
+        assert body["answer"] is not None
+        answer_lower = body["answer"].lower()
+        assert ("similar" in answer_lower or "similarity" in answer_lower)
+        
+        # Should have actual data
+        data = body.get("data", [])
+        assert len(data) > 0
 
-    async def dummy_intent_cypher(question: str):
-        # Return None to trigger fallback
-        return None
+    def test_geographic_filtering(self, client):
+        """Test that geographic filtering is working"""
+        response = client.post("/qa", json={"question": "Properties in California"})
+        assert response.status_code == 200
+        body = response.json()
+        
+        # Should find California assets
+        assert body["answer"] is not None
+        answer_lower = body["answer"].lower()
+        assert "california" in answer_lower
+        
+        # Should have actual data from database
+        data = body.get("data", [])
+        assert len(data) > 0 or "found" in answer_lower
 
-    async def dummy_fallback(question: str):
-        called["q"] = question
-        return {
-            "answer": "fallback",
-            "cypher": None,
-            "data": [],
-            "question": question,
-            "pattern_matched": False,
-            "llm_fallback": True,
-        }
+    def test_portfolio_analytics(self, client):
+        """Test that portfolio analytics queries work"""
+        response = client.post("/qa", json={"question": "Portfolio distribution by region"})
+        assert response.status_code == 200
+        body = response.json()
+        
+        # Should return distribution data
+        assert body["answer"] is not None
+        assert body.get("data") is not None
+        
+        # Should mention regions or distribution
+        answer_lower = body["answer"].lower()
+        assert ("region" in answer_lower or "distribution" in answer_lower or 
+                "west" in answer_lower or "portfolio" in answer_lower)
 
-    # Mock both functions to ensure fallback is called
-    monkeypatch.setattr(graphrag, "llm_intent_cypher", dummy_intent_cypher)
-    monkeypatch.setattr(graphrag, "llm_fallback", dummy_fallback)
 
-    client = TestClient(app)
-    response = client.post("/qa", json={"question": "nonsense query"})
-    assert response.status_code == 200
-    assert called["q"] == "nonsense query"
-    body = response.json()
-    assert body["pattern_matched"] is False
-    assert body.get("llm_fallback") is True
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

@@ -15,7 +15,8 @@ langchain>=0.1.14,<1.0.0
 openai>=1.12.0,<2.0.0
 langchain-openai>=0.2.0
 langchain-neo4j>=0.3.0
-langgraph>=0.2.6
+langgraph>=0.2.40  # Updated for latest workflow features
+langsmith>=0.1.40  # Added for debugging and tracing
 
 # Data processing and utilities
 pandas>=2.1.0,<3.0.0

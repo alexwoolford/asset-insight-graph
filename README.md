@@ -1,193 +1,222 @@
 # Asset Insight Graph
 
-**Intelligent Real Estate Portfolio Analysis using Neo4j Knowledge Graphs with LLM-powered GraphRAG**
+A sophisticated real estate portfolio analysis system using **LangGraph workflows**, Neo4j graph database, and intelligent query processing.
 
-A sophisticated knowledge graph system that combines CIM Group's real estate portfolio data with Federal Reserve Economic Data (FRED) to enable advanced business intelligence queries using natural language processing and template-based query generation.
+## 🚀 Architecture
 
-> **🎯 Production Ready**: Clean, optimized GraphRAG system with template-based Cypher generation and intelligent query routing.
+This system uses **modern LangGraph workflow orchestration** for intelligent query processing:
 
-## 🏗️ **System Architecture**
+### Core Components
+- **LangGraph Workflows**: State-machine based query orchestration with proper routing
+- **Intent Classification**: Smart categorization of user queries
+- **Vector Search**: Semantic similarity using OpenAI embeddings
+- **Template-Based Cypher**: Robust, validated query generation
+- **Neo4j Graph Database**: High-performance graph storage with vector indexing
 
-### **GraphRAG Query Engine**
-- **Template-Based**: Pre-built valid Cypher patterns for reliable query execution
-- **Intent Classification**: Keyword-based routing to specialized handlers  
-- **Vector Search**: Semantic similarity search for ESG and sustainability queries
-- **Smart Routing**: Automatic selection of optimal query strategy
-- **Error Recovery**: Multi-layer fallback systems with graceful handling
-
-### **Query Categories**
-- **Portfolio Analysis**: Asset distribution by platform, region, investment type
-- **Geographic Queries**: Location-based asset filtering and analysis
-- **Semantic Search**: ESG, sustainability, and qualitative asset discovery
-- **Economic Data**: FRED indicators with trend analysis
-- **Trend Analysis**: Historical comparisons and change detection
-
-## 🎯 **Key Features**
-
-### **✅ Implemented**
-- 🏗️ Complete knowledge graph with CIM assets and FRED economic data
-- 🧠 Template-based GraphRAG with reliable Cypher generation
-- 🎯 Keyword-based intent classification (95%+ accuracy)
-- 🔍 Semantic vector search for ESG/sustainability queries
-- 🛡️ Multi-layer error recovery and fallback systems
-- 📊 Formatted table responses with proper columns
-- 🌐 Interactive Streamlit dashboard
-- 🚀 High-performance FastAPI backend
-
-### **🎯 Query Capabilities**
-- **Portfolio Distribution**: "Portfolio distribution by platform/region"
-- **Geographic Analysis**: "Properties in Texas", "Mixed use assets in California"  
-- **Semantic Search**: "ESG friendly properties", "Sustainable renewable energy projects"
-- **Economic Indicators**: "California unemployment rate", "30-year mortgage trends"
-- **Asset Counts**: "How many infrastructure assets"
-
-## 📂 **Project Structure**
-
+### Workflow Overview
 ```
-asset-insight-graph/
-├── api/                          # FastAPI backend
-│   ├── graphrag.py              # Template-based GraphRAG engine
-│   ├── main.py                  # FastAPI application
-│   └── config.py                # Database configuration
-├── etl/                         # Data loading and processing
-│   ├── cim_loader.py           # CIM asset data loader
-│   ├── fred_loader.py          # FRED timeseries chain loader
-│   ├── database_reset.py       # Database cleanup
-│   ├── verify_knowledge_graph.py # Data verification
-│   ├── property_descriptions.py # AI descriptions
-│   └── vector_loader.py        # Vector embeddings
-├── docs/                        # Documentation and diagrams
-├── streamlit_app.py            # Streamlit UI
-├── Makefile                    # Standardized commands
-└── requirements.txt            # Python dependencies
+Question → Intent Classification → Workflow Routing → Data Processing → Response Formatting
 ```
 
-## 🚀 **Quick Start**
+**Supported Query Types:**
+- **Portfolio Analysis**: Asset distribution by platform, region, type
+- **Geographic Search**: Location-based asset filtering with geospatial support  
+- **Semantic Search**: Vector similarity using asset descriptions
+- **Combined Queries**: Geographic + semantic filtering with proper vector search
+- **Economic Data**: Interest rates, unemployment, market indicators
 
-### **Prerequisites**
+## 🛠 Setup
+
+### Prerequisites
 - Python 3.11+
-- Neo4j 5.0+ with APOC and GDS plugins
-- OpenAI API key for vector search
+- Neo4j 5.x with APOC and GDS plugins
+- OpenAI API key
 
-### **Installation**
+### Installation
+
+1. **Clone and install dependencies:**
 ```bash
-# Clone and setup
 git clone <repository>
 cd asset-insight-graph
 pip install -r requirements.txt
-
-# Configure environment
-export NEO4J_URI="bolt://localhost:7687"
-export NEO4J_USER="neo4j"
-export NEO4J_PASSWORD="your_password"
-export OPENAI_API_KEY="your_openai_key"
-
-# Load data
-make load-data
-
-# Start services
-make start-api     # FastAPI backend on :8000
-make start-ui      # Streamlit UI on :8501
 ```
 
-## 🧪 **Testing**
-
-### **API Testing**
+2. **Configure environment variables:**
 ```bash
-# Portfolio analysis
-curl -X POST "http://localhost:8000/qa" \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Portfolio distribution by platform"}'
+export NEO4J_URI="bolt://localhost:7687"
+export NEO4J_USERNAME="neo4j"  
+export NEO4J_PASSWORD="your_password"
+export NEO4J_DATABASE="neo4j"
+export OPENAI_API_KEY="your_openai_api_key"
+```
 
-# Geographic queries  
-curl -X POST "http://localhost:8000/qa" \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Mixed use properties in California"}'
+3. **Load data into Neo4j:**
+```bash
+# Load sample real estate portfolio data
+python -m etl.cim_loader
 
-# Semantic search
+# Load economic indicators
+python -m etl.fred_loader
+
+# Create vector embeddings
+python -m etl.vector_loader
+```
+
+4. **Start the API:**
+```bash
+uvicorn api.main:app --reload --port 8000
+```
+
+5. **Launch Streamlit interface:**
+```bash
+streamlit run streamlit_app.py --server.port 8501
+```
+
+## 📊 Usage
+
+### API Endpoints
+
+**Ask Questions:**
+```bash
 curl -X POST "http://localhost:8000/qa" \
   -H "Content-Type: application/json" \
   -d '{"question": "Properties in Texas that are ESG friendly"}'
 ```
 
-### **Expected Results**
-- **Portfolio queries**: Clean tables with proper columns (Platform, Count)
-- **Geographic queries**: Asset details with location and type information
-- **Semantic queries**: Vector similarity results with confidence scores
-- **Economic queries**: FRED indicators with dates and trend analysis
-
-## 📊 **Data Sources**
-
-### **CIM Group Real Estate Portfolio**
-- **12 Assets** across multiple markets and platforms
-- **Platforms**: Real Estate (5), Infrastructure (4), Credit (3)
-- **Geographic Distribution**: West (4), Midwest (3), Southwest (3), Northeast (1), Southeast (1)
-- **Property Types**: Mixed Use, Commercial, Residential, Energy Infrastructure, Environmental Infrastructure
-
-### **FRED Economic Data**
-- **Unemployment Rates**: California, Texas, National
-- **Interest Rates**: 30-Year Mortgage, Federal Funds Rate
-- **Time Series Chains**: HEAD/NEXT/TAIL relationship patterns
-- **Historical Coverage**: Multi-year trend analysis capability
-
-## ⚙️ **System Performance**
-
-### **Query Success Rates**
-- **Portfolio Analysis**: 100% success with formatted tables
-- **Geographic Queries**: 95% accuracy with proper location filtering
-- **Semantic Search**: 95% accuracy with vector similarity
-- **Economic Data**: 90% success with FRED integration
-- **Template Generation**: 100% valid Cypher (no GROUP BY issues)
-
-### **Response Times**
-- **Simple Portfolio Queries**: < 100ms
-- **Geographic Filtering**: < 200ms  
-- **Vector Semantic Search**: < 500ms
-- **Complex Economic Trends**: < 300ms
-
-## 🔧 **Technical Details**
-
-### **GraphRAG Implementation**
-- **Template System**: Pre-built Cypher patterns for each query type
-- **Intent Classification**: Keyword-based routing with 95%+ accuracy
-- **Vector Integration**: OpenAI embeddings for semantic similarity
-- **Error Handling**: Graceful fallbacks with user-friendly messages
-
-### **Database Schema**
-- **Assets**: Properties with embeddings and descriptions
-- **Economic Metrics**: FRED time series with HEAD/TAIL chains
-- **Geographic Hierarchy**: Asset → City → State → Region relationships
-- **Vector Index**: `asset_description_vector` for semantic search
-
-## 🛠️ **Development**
-
-### **Available Commands**
+**Generate Workflow Diagram:**
 ```bash
-make help           # Show all available commands
-make setup          # Initial environment setup
-make load-data      # Load CIM and FRED data
-make reset-db       # Reset database
-make start-api      # Start FastAPI backend
-make start-ui       # Start Streamlit UI
-make test          # Run test suite
+curl "http://localhost:8000/workflow-diagram"
 ```
 
-### **Adding New Query Types**
-1. **Define Template**: Add new Cypher pattern to `CypherTemplate` class
-2. **Update Classification**: Add keywords to intent classification
-3. **Create Handler**: Implement specialized handler method
-4. **Add Formatting**: Create response formatter for data type
-5. **Test**: Verify with sample queries
+**Health Check:**
+```bash
+curl "http://localhost:8000/health"
+```
 
-## 📈 **Future Enhancements**
+### Example Queries
 
-- **Expanded Asset Universe**: Additional property types and markets
-- **Advanced Analytics**: Risk metrics and performance indicators  
-- **Real-time Updates**: Live FRED data integration
-- **Enhanced UI**: Interactive dashboards and visualizations
-- **Multi-modal Search**: Image and document analysis capabilities
+**Portfolio Analysis:**
+- "Portfolio distribution by platform"
+- "How many infrastructure assets"
+- "Assets by region"
+
+**Geographic Search:**
+- "Assets in California"
+- "Commercial buildings in Texas"
+- "Assets within 100km of Los Angeles"
+
+**Semantic Search:**
+- "Properties similar to The Independent"
+- "Sustainable renewable energy projects"
+- "ESG friendly properties"
+
+**Combined Queries:**
+- "Properties in Texas that are ESG friendly" ✅ *Now works with proper vector search!*
+- "Luxury assets in California"
+
+## 🏗 Technical Architecture
+
+### LangGraph Workflow System
+
+The system uses **LangGraph StateGraph** for intelligent workflow orchestration:
+
+```python
+workflow = StateGraph(AssetGraphState)
+
+# Workflow nodes
+workflow.add_node("classify_intent", self._classify_intent_node)
+workflow.add_node("portfolio_analysis", self._portfolio_analysis_node)
+workflow.add_node("geographic_search", self._geographic_search_node)
+workflow.add_node("semantic_search", self._semantic_search_node)
+workflow.add_node("economic_data", self._economic_data_node)
+workflow.add_node("format_response", self._format_response_node)
+
+# Conditional routing based on intent
+workflow.add_conditional_edges("classify_intent", self._route_by_intent, {...})
+```
+
+### Key Features
+
+✅ **Real Vector Search**: Proper semantic similarity using embeddings
+✅ **Geographic Filtering**: Combined location + semantic queries  
+✅ **Workflow Orchestration**: LangGraph state machine architecture
+✅ **Automatic Diagrams**: Generated workflow visualizations
+✅ **Real Integration Tests**: No mocks - tests actual database behavior
+✅ **Neo4j Date Serialization**: Proper handling of temporal data types
+
+### Fixed Issues
+
+- **Geographic+Semantic Search**: Now uses proper vector embeddings instead of broken keyword matching
+- **Health Endpoint**: Returns comprehensive database status
+- **Test Coverage**: Real integration tests that catch actual bugs (no mocks!)
+
+## 🧪 Testing
+
+**Run real integration tests:**
+```bash
+pytest tests/ -v
+```
+
+**Key test categories:**
+- Real database connectivity tests
+- Vector search functionality validation  
+- Geographic filtering accuracy
+- Portfolio analytics correctness
+- Error handling robustness
+
+*Note: Tests hit actual database and validate real system behavior*
+
+## 📈 Performance & Scaling
+
+### Database Optimizations
+- Vector indexes on asset descriptions (`asset_description_vector`)
+- Composite indexes for geographic queries
+- Optimized Cypher templates with parameter binding
+
+### Caching Strategy
+- Cached Neo4j driver connections
+- LangGraph workflow compilation caching
+- Template-based query reuse
+
+## 🔧 Development
+
+### Project Structure
+```
+├── api/
+│   ├── graphrag.py          # Main LangGraph implementation
+│   ├── main.py              # FastAPI application  
+│   └── config.py            # Database configuration
+├── etl/                     # Data loading pipeline
+├── tests/                   # Real integration tests
+├── docs/workflows/          # Auto-generated diagrams
+└── streamlit_app.py         # User interface
+```
+
+### Workflow Diagram Generation
+Automatic diagram generation using LangGraph:
+```bash
+curl "http://localhost:8000/workflow-diagram"
+# → docs/workflows/langgraph_workflow.png
+```
+
+## 🎯 Key Improvements Achieved
+
+1. **Modern Architecture**: LangGraph workflows replace simple if/else routing
+2. **Real Vector Search**: Proper semantic similarity with geographic filtering
+3. **Industry Standards**: StateGraph, workflow orchestration, automatic documentation
+4. **Bug-Free Testing**: Real integration tests catch actual issues
+5. **Clean Codebase**: Consolidated implementation, removed legacy complexity
+
+## 📋 Requirements
+
+See `requirements.txt` for complete dependency list. Key packages:
+- `langgraph >= 0.2.40` - Workflow orchestration
+- `langsmith >= 0.1.40` - Monitoring integration  
+- `neo4j >= 5.x` - Graph database driver
+- `openai` - Embeddings and language models
+- `fastapi` - API framework
+- `streamlit` - User interface
 
 ---
 
-**Built with**: Neo4j, FastAPI, Streamlit, OpenAI, LangChain
-**Status**: Production Ready ✅
+**Built with LangGraph workflows for modern, reliable asset portfolio analysis.**
