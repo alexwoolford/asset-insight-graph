@@ -5,8 +5,24 @@ import re
 from typing import Any, Dict, List
 
 import openai
+import neo4j.time
 
 from .config import Settings, get_driver
+
+def convert_neo4j_types(obj):
+    """Convert Neo4j types to JSON-serializable types."""
+    if isinstance(obj, neo4j.time.Date):
+        return obj.iso_format()
+    elif isinstance(obj, neo4j.time.DateTime):
+        return obj.iso_format()
+    elif isinstance(obj, neo4j.time.Time):
+        return obj.iso_format()
+    elif isinstance(obj, list):
+        return [convert_neo4j_types(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: convert_neo4j_types(value) for key, value in obj.items()}
+    else:
+        return obj
 
 # Add state mapping for abbreviations and case insensitivity
 STATE_MAPPINGS = {
@@ -57,6 +73,117 @@ def normalize_state_name(state_input: str) -> str:
 # Query patterns using Neo4j native geospatial Point types
 # NOTE: Order matters! More specific patterns should come first
 GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
+    # FRED economic queries (most specific - must come first)
+    # Flexible unemployment patterns for California
+    (
+        re.compile(r"(?:unemployment|jobless).*(?:rate|percent).*(?:in\s+)?california|california.*(?:unemployment|jobless).*(?:rate|percent)", re.I),
+        """MATCH (mt:MetricType {name: "California Unemployment Rate"})-[:TAIL]->(latest:MetricValue)
+           RETURN "California" AS state, 
+                  latest.value AS unemployment_rate,
+                  latest.date AS as_of_date,
+                  mt.name AS metric_name""",
+    ),
+    # Flexible unemployment patterns for Texas
+    (
+        re.compile(r"(?:unemployment|jobless).*(?:rate|percent).*(?:in\s+)?texas|texas.*(?:unemployment|jobless).*(?:rate|percent)", re.I),
+        """MATCH (mt:MetricType {name: "Texas Unemployment Rate"})-[:TAIL]->(latest:MetricValue)
+           RETURN "Texas" AS state, 
+                  latest.value AS unemployment_rate,
+                  latest.date AS as_of_date,
+                  mt.name AS metric_name""",
+    ),
+    # Flexible unemployment patterns for Georgia
+    (
+        re.compile(r"(?:unemployment|jobless).*(?:rate|percent).*(?:in\s+)?georgia|georgia.*(?:unemployment|jobless).*(?:rate|percent)", re.I),
+        """MATCH (mt:MetricType {name: "Georgia Unemployment Rate"})-[:TAIL]->(latest:MetricValue)
+           RETURN "Georgia" AS state, 
+                  latest.value AS unemployment_rate,
+                  latest.date AS as_of_date,
+                  mt.name AS metric_name""",
+    ),
+    # Trend/historical patterns (must come before current rate patterns)
+    (
+        re.compile(r"(?:trend|trends?|history|historical|over time|change).*(?:30\s*year|mortgage).*(?:rate|percent)|(?:30\s*year|mortgage).*(?:rate|percent).*(?:trend|trends?|history|historical|over time|change)", re.I),
+        """MATCH (mt:MetricType {name: "30-Year Mortgage Rate"})-[:HEAD]->(first:MetricValue)
+           MATCH (mt)-[:TAIL]->(last:MetricValue)
+           RETURN mt.name AS metric_name,
+                  first.value AS start_value,
+                  first.date AS start_date,
+                  last.value AS end_value,
+                  last.date AS end_date,
+                  last.value - first.value AS change,
+                  round(((last.value - first.value) / first.value) * 100, 2) AS percent_change""",
+    ),
+    (
+        re.compile(r"(?:trend|trends?|history|historical|over time|change).*(?:federal\s+funds?|fed\s+funds?|ffr).*(?:rate|percent)|(?:federal\s+funds?|fed\s+funds?|ffr).*(?:rate|percent).*(?:trend|trends?|history|historical|over time|change)", re.I),
+        """MATCH (mt:MetricType {name: "Federal Funds Rate"})-[:HEAD]->(first:MetricValue)
+           MATCH (mt)-[:TAIL]->(last:MetricValue)
+           RETURN mt.name AS metric_name,
+                  first.value AS start_value,
+                  first.date AS start_date,
+                  last.value AS end_value,
+                  last.date AS end_date,
+                  last.value - first.value AS change,
+                  round(((last.value - first.value) / first.value) * 100, 2) AS percent_change""",
+    ),
+    (
+        re.compile(r"(?:trend|trends?|history|historical|over time|change).*(?:treasury|10\s*year).*(?:rate|percent|yield)|(?:treasury|10\s*year).*(?:rate|percent|yield).*(?:trend|trends?|history|historical|over time|change)", re.I),
+        """MATCH (mt:MetricType {name: "10-Year Treasury Rate"})-[:HEAD]->(first:MetricValue)
+           MATCH (mt)-[:TAIL]->(last:MetricValue)
+           RETURN mt.name AS metric_name,
+                  first.value AS start_value,
+                  first.date AS start_date,
+                  last.value AS end_value,
+                  last.date AS end_date,
+                  last.value - first.value AS change,
+                  round(((last.value - first.value) / first.value) * 100, 2) AS percent_change""",
+    ),
+    (
+        re.compile(r"(?:trend|trends?|history|historical|over time|change).*(?:interest\s+rates?|rates?)|(?:interest\s+rates?|rates?).*(?:trend|trends?|history|historical|over time|change)", re.I),
+        """MATCH (mt:MetricType)-[:HEAD]->(first:MetricValue)
+           MATCH (mt)-[:TAIL]->(last:MetricValue)
+           WHERE mt.category = "Interest Rate"
+           RETURN mt.name AS metric_name,
+                  first.value AS start_value,
+                  first.date AS start_date,
+                  last.value AS end_value,
+                  last.date AS end_date,
+                  last.value - first.value AS change,
+                  round(((last.value - first.value) / first.value) * 100, 2) AS percent_change
+           ORDER BY ABS(change) DESC""",
+    ),
+    
+    # Flexible interest rate patterns (current values)
+    (
+        re.compile(r"(?:current|latest|today's)?\s*(?:interest\s+rates?|rates?)", re.I),
+        """MATCH (mt:MetricType)-[:TAIL]->(latest:MetricValue)
+           WHERE mt.category = "Interest Rate"
+           RETURN mt.name AS rate_type, 
+                  latest.value AS current_rate,
+                  latest.date AS as_of_date
+           ORDER BY mt.name""",
+    ),
+    (
+        re.compile(r"(?:federal\s+funds?|fed\s+funds?|ffr).*(?:rate|percent)|(?:rate|percent).*(?:federal\s+funds?|fed\s+funds?|ffr)", re.I),
+        """MATCH (mt:MetricType {name: "Federal Funds Rate"})-[:TAIL]->(latest:MetricValue)
+           RETURN mt.name AS rate_type, 
+                  latest.value AS current_rate,
+                  latest.date AS as_of_date""",
+    ),
+    (
+        re.compile(r"(?:treasury|10\s*year).*(?:rate|percent|yield)|(?:rate|percent|yield).*(?:treasury|10\s*year)", re.I),
+        """MATCH (mt:MetricType {name: "10-Year Treasury Rate"})-[:TAIL]->(latest:MetricValue)
+           RETURN mt.name AS rate_type, 
+                  latest.value AS current_rate,
+                  latest.date AS as_of_date""",
+    ),
+    (
+        re.compile(r"(?:mortgage|30\s*year).*(?:rate|percent)|(?:rate|percent).*(?:mortgage|30\s*year)", re.I),
+        """MATCH (mt:MetricType {name: "30-Year Mortgage Rate"})-[:TAIL]->(latest:MetricValue)
+           RETURN mt.name AS rate_type, 
+                  latest.value AS current_rate,
+                  latest.date AS as_of_date""",
+    ),
     # California specific (most specific geographic query)
     (
         re.compile(r"california assets|assets in california", re.I),
@@ -217,49 +344,7 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
         re.compile(r"(?:luxury|premium|high-end|institutional|quality|amenities|modern)", re.I),
         "VECTOR_SEARCH",
     ),
-    
-    # FRED-enhanced business intelligence queries (Fixed for actual data structure)
-    (
-        re.compile(r"(?:current|latest)\s+(?:interest\s+)?rates?", re.I),
-        """MATCH (mt:MetricType {category: "Interest Rate"})-[:TAIL]->(latest:MetricValue)
-           RETURN mt.name AS rate_type, latest.value AS current_rate, latest.date AS as_of_date
-           ORDER BY mt.name""",
-    ),
-    (
-        re.compile(r"unemployment\s+(?:in|by)\s+(?:states?|where.*assets?)", re.I),
-        """MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(s:State)
-           MATCH (s)-[:HAS_METRIC]->(mt:MetricType)
-           WHERE mt.category = "Labor" AND mt.name CONTAINS "Unemployment"
-           MATCH (mt)-[:TAIL]->(latest:MetricValue)
-           RETURN s.name AS state, 
-                  latest.value AS current_unemployment_rate,
-                  count(DISTINCT a) AS assets_in_state,
-                  latest.date AS latest_data
-           ORDER BY current_unemployment_rate ASC""",
-    ),
-    (
-        re.compile(r"economic\s+trends?\s+(?:for|in)\s+(?P<state>.+)", re.I),
-        """MATCH (s:State {name: $normalized_state})-[:HAS_METRIC]->(mt:MetricType)-[:HAS_VALUE]->(mv:MetricValue)
-           WHERE mv.date >= date() - duration({months: 6})
-           RETURN mt.name AS metric_name, 
-                  mt.category AS category,
-                  avg(mv.value) AS avg_value,
-                  max(mv.date) AS latest_date,
-                  count(mv) AS data_points
-           ORDER BY mt.category, mt.name""",
-    ),
-    (
-        re.compile(r"(?:interest\s+rate|rate)\s+(?:trends?|changes?|analysis)", re.I),
-        """MATCH (mt:MetricType {category: "Interest Rate"})-[:HEAD]->(first:MetricValue)
-           MATCH (mt)-[:TAIL]->(last:MetricValue)
-           RETURN mt.name AS rate_type, 
-                  first.value AS start_value,
-                  last.value AS end_value,
-                  last.value - first.value AS change,
-                  first.date AS start_date,
-                  last.date AS end_date
-           ORDER BY ABS(change) DESC""",
-    ),
+
     (
         re.compile(r"assets?\s+(?:by|grouped?\s+by)\s+economic\s+(?:environment|context)", re.I),
         """MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(s:State)-[:HAS_METRIC]->(mt:MetricType)
@@ -546,6 +631,9 @@ async def answer_geospatial(question: str) -> Dict[str, Any]:
                 result = await session.run(cypher, params)
                 data = await result.data()
 
+            # Convert Neo4j types to JSON-serializable types
+            data = convert_neo4j_types(data)
+
             summary = generate_geospatial_summary(question, data, cypher)
 
             return {
@@ -557,26 +645,8 @@ async def answer_geospatial(question: str) -> Dict[str, Any]:
                 "geospatial_enabled": True,
             }
 
-    # Fallback: suggest what kinds of questions can be answered
-    suggestions = [
-        "Assets in California (or CA)",
-        "Real estate assets", 
-        "Properties in Texas that are ESG friendly",
-        "Sustainable assets in California",
-        "Luxury properties in New York",
-        "Assets within 50km of Los Angeles",
-        "How many assets",
-    ]
-
-    return {
-        "answer": f"I couldn't understand that question. Try asking about: {', '.join(suggestions[:6])}",
-        "cypher": None,
-        "data": [],
-        "question": question,
-        "pattern_matched": False,
-        "geospatial_enabled": False,
-        "suggestions": suggestions,
-    }
+    # LLM fallback for unmatched queries
+    return await llm_fallback(question)
 
 
 def generate_geospatial_summary(question: str, data: List[Dict], cypher: str) -> str:
@@ -587,6 +657,56 @@ def generate_geospatial_summary(question: str, data: List[Dict], cypher: str) ->
     result_count = len(data)
 
     # IMPORTANT: Check specific patterns before generic ones
+    
+    # FRED economic data (unemployment rates, etc.)
+    if "unemployment_rate" in str(data[0]):
+        item = data[0]
+        state = item.get("state", "Unknown")
+        rate = item.get("unemployment_rate", "Unknown")
+        date = item.get("as_of_date", "Unknown")
+        return f"The current unemployment rate in {state} is {rate}% (as of {date})"
+    
+    # Trend/historical data (start_value, end_value, change)
+    if "start_value" in str(data[0]) and "end_value" in str(data[0]):
+        if result_count == 1:
+            item = data[0]
+            metric = item.get("metric_name", "Rate")
+            start_val = item.get("start_value", 0)
+            end_val = item.get("end_value", 0)
+            change = item.get("change", 0)
+            percent_change = item.get("percent_change", 0)
+            start_date = item.get("start_date", "Unknown")
+            end_date = item.get("end_date", "Unknown")
+            
+            direction = "increased" if change > 0 else "decreased"
+            abs_change = abs(change)
+            abs_percent = abs(percent_change)
+            
+            return f"{metric} has {direction} from {start_val}% ({start_date}) to {end_val}% ({end_date}), a change of {abs_change:.2f} percentage points ({abs_percent}%)"
+        else:
+            trends = []
+            for item in data:
+                metric = item.get("metric_name", "Unknown")
+                change = item.get("change", 0)
+                direction = "↑" if change > 0 else "↓"
+                trends.append(f"{metric}: {direction}{abs(change):.2f}pp")
+            return f"Interest rate trends: {', '.join(trends)}"
+    
+    # Interest rate data (current values)
+    if "current_rate" in str(data[0]):
+        if result_count == 1:
+            item = data[0]
+            rate_type = item.get("rate_type", "Interest rate")
+            rate = item.get("current_rate", "Unknown")
+            date = item.get("as_of_date", "Unknown")
+            return f"The current {rate_type.lower()} is {rate}% (as of {date})"
+        else:
+            rates = []
+            for item in data:
+                rate_type = item.get("rate_type", "Unknown")
+                rate = item.get("current_rate", "Unknown")
+                rates.append(f"{rate_type}: {rate}%")
+            return f"Current interest rates: {', '.join(rates)}"
     
     # Portfolio distribution (specific - check this BEFORE generic asset_count)
     if "platform" in str(data[0]) and "region" in str(data[0]) and "asset_count" in str(data[0]):
@@ -635,3 +755,93 @@ def generate_geospatial_summary(question: str, data: List[Dict], cypher: str) ->
         return f"Found {result_count} assets: {', '.join(asset_names)}"
     else:
         return f"Found {result_count} assets including: {', '.join(asset_names)} and {result_count - 5} more"
+
+
+async def llm_fallback(question: str) -> Dict[str, Any]:
+    """LLM-powered fallback for unmatched queries."""
+    
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        return {
+            "answer": "I couldn't understand that question. Try asking about assets, unemployment rates, or interest rates.",
+            "cypher": None,
+            "data": [],
+            "question": question,
+            "pattern_matched": False,
+            "llm_fallback": False,
+        }
+    
+    try:
+        client = openai.OpenAI(api_key=openai_key)
+        
+        # Prompt to analyze intent and suggest rephrasing
+        prompt = f"""You are helping a user query a knowledge graph containing:
+- Real estate assets (CIM portfolio: 12 assets across US platforms)
+- Economic data (FRED: unemployment rates, interest rates for states)
+- Geographic relationships (assets in cities/states/regions)
+- Vector embeddings for semantic asset similarity
+
+The user asked: "{question}"
+
+This query didn't match any predefined patterns. Analyze the intent and provide ONE of these responses:
+
+1. REPHRASE: If it's similar to a supported query, suggest a rephrasing:
+   "Try asking: [exact rephrase that would work]"
+
+2. DIRECT_ANSWER: If you can provide a specific answer about what data is available:
+   "Here's what I can tell you: [specific answer]"
+
+3. GUIDANCE: If unclear, provide guidance:
+   "I can help with: [list 3-4 specific examples]"
+
+Supported query types:
+- "unemployment in [California/Texas/Georgia]" 
+- "federal funds rate" or "current interest rates"
+- "assets in [state/city]"
+- "[platform] assets" (real estate/infrastructure/credit)
+- "assets within [X]km of [location]"
+- "portfolio distribution"
+- Semantic queries: "[ESG/luxury/sustainable] properties in [state]"
+
+Respond with just the suggested text, no explanations."""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150,
+            temperature=0.3
+        )
+        
+        suggestion = response.choices[0].message.content.strip()
+        
+        return {
+            "answer": suggestion,
+            "cypher": None,
+            "data": [],
+            "question": question,
+            "pattern_matched": False,
+            "llm_fallback": True,
+            "suggestion_type": "intelligent_guidance"
+        }
+        
+    except Exception as e:
+        # Fallback to static suggestions if LLM fails
+        suggestions = [
+            "unemployment in California",
+            "federal funds rate", 
+            "assets in California",
+            "real estate assets",
+            "sustainable properties in Texas",
+            "assets within 50km of Los Angeles"
+        ]
+        
+        return {
+            "answer": f"I couldn't understand that question. Try asking about: {', '.join(suggestions[:4])}",
+            "cypher": None,
+            "data": [],
+            "question": question,
+            "pattern_matched": False,
+            "llm_fallback": False,
+            "error": str(e),
+            "suggestions": suggestions,
+        }

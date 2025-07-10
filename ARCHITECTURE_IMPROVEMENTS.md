@@ -2,10 +2,21 @@
 
 ## 🚨 **Systemic Issues Identified**
 
+### **CRITICAL DISCOVERY: Rich Data, Broken Access**
+
+**User Query**: "What's the current unemployment rate in California?"
+- ✅ **Data exists**: California unemployment rate is 4.9% (as of 2025-05-01)
+- ✅ **Query works in Python**: Direct Neo4j access returns perfect results
+- ❌ **Natural language fails**: API returns "I couldn't understand that question"
+- ❌ **No fallback**: System doesn't try alternative approaches
+
+**This perfectly demonstrates the core architectural problem: sophisticated data infrastructure with brittle natural language interface.**
+
 ### 1. **Over-Reliance on Regex Patterns**
 - **Problem**: 50+ hardcoded regex patterns that break with slight language variations
-- **Impact**: User queries fail silently if they don't match exact patterns
-- **Example**: "Current interest rates" works, but "What are today's rates?" fails
+- **Impact**: User queries fail silently if they don't match exact patterns  
+- **Example**: "Current interest rates" matches, but "What are today's rates?" fails
+- **Evidence**: Added FRED patterns cause Internal Server Errors despite data existing
 
 ### 2. **FRED Integration Broken**
 - **Problem**: Complex FRED patterns cause server errors despite data being present
@@ -162,10 +173,10 @@ if not pattern_matched:
 - ❌ Poor portfolio summarization
 
 ### **After Phase 1**
-- ✅ 13/13 examples working
-- ✅ 3+ examples showcasing FRED capabilities
-- ✅ Graceful fallbacks for unrecognized queries
-- ✅ Intelligent summarization
+- ✅ 13/13 examples working (removed broken FRED patterns)
+- ❌ 0 examples showcasing FRED capabilities (natural language access broken)
+- ❌ No graceful fallbacks for unrecognized queries  
+- ✅ Intelligent summarization (portfolio distribution fixed)
 
 ### **After Phase 2**
 - 🎯 90%+ query success rate (vs. current ~60%)

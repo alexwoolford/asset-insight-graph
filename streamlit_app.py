@@ -48,8 +48,8 @@ class AssetInsightGraphUI:
             "How many infrastructure assets",
             "Sustainable renewable energy projects",
             "Mixed use properties in California",
-            "Assets in California",
             "Real estate assets",
+            "Properties similar to The Independent",
         ]
 
     def check_api_health(self) -> bool:

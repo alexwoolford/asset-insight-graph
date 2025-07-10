@@ -28,8 +28,8 @@ def create_workflow_diagram():
     query_analysis --> graph_search : Pure Geographic Query
     query_analysis --> __end__ : Invalid Query
     
-    hybrid_search --> geographic_filter : Step 1: Filter by Location
-    geographic_filter --> semantic_ranking : Step 2: Rank by Similarity
+    hybrid_search --> geographic_filter : Step 1 Filter by Location
+    geographic_filter --> semantic_ranking : Step 2 Rank by Similarity
     semantic_ranking --> format_results
     
     vector_search --> embedding_generation
