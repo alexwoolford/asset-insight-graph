@@ -41,7 +41,7 @@ make setup
 
 # 2. Configure environment variables (.env file)
 NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
+NEO4J_USERNAME=neo4j
 NEO4J_PASSWORD=your_password
 NEO4J_DB=neo4j
 OPENAI_API_KEY=your_openai_key  # Optional for vector search

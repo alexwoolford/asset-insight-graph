@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment."""
 
     neo4j_uri: str | None = os.getenv("NEO4J_URI")
-    neo4j_user: str | None = os.getenv("NEO4J_USERNAME")
+    neo4j_user: str | None = os.getenv("NEO4J_USERNAME") or os.getenv("NEO4J_USER")
     neo4j_pwd: str | None = os.getenv("NEO4J_PASSWORD")
     neo4j_db: str = os.getenv("NEO4J_DATABASE", "neo4j")
 
@@ -25,7 +25,7 @@ def get_driver() -> AsyncDriver:
         if not s.neo4j_uri:
             missing.append("NEO4J_URI")
         if not s.neo4j_user:
-            missing.append("NEO4J_USERNAME")
+            missing.append("NEO4J_USERNAME/NEO4J_USER")
         if not s.neo4j_pwd:
             missing.append("NEO4J_PASSWORD")
         raise EnvironmentError(
