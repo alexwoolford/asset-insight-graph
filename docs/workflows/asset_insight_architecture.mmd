@@ -1,9 +1,3 @@
-"""Generate system architecture diagram for the Asset Insight Graph project."""
-
-import json
-
-# Updated diagram showing the clean template-based system
-diagram_content = """
 graph TD
     A["🧑 User Query<br/>Natural Language"] --> B["🧠 GraphRAG Engine<br/>Template-Based"]
     
@@ -53,20 +47,3 @@ graph TD
     style O fill:#e1f5fe
     style P fill:#f3e5f5
     style Q fill:#e8f5e8
-"""
-
-def main():
-    # Save the diagram content to file
-    with open('workflows/asset_insight_architecture.mmd', 'w') as f:
-        f.write(diagram_content.strip())
-    
-    print("✅ Updated architecture diagram generated: workflows/asset_insight_architecture.mmd")
-    print("🎯 Key improvements:")
-    print("   - Template-based Cypher generation (no more GROUP BY issues)")
-    print("   - Keyword-based intent classification")
-    print("   - Clean response formatting")
-    print("   - Vector search for semantic queries")
-    print("   - Reliable query patterns")
-
-if __name__ == "__main__":
-    main()

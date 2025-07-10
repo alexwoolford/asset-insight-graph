@@ -128,6 +128,10 @@ def test_llm_fallback(monkeypatch):
 
     called = {}
 
+    async def dummy_intent_cypher(question: str):
+        # Return None to trigger fallback
+        return None
+
     async def dummy_fallback(question: str):
         called["q"] = question
         return {
@@ -139,6 +143,8 @@ def test_llm_fallback(monkeypatch):
             "llm_fallback": True,
         }
 
+    # Mock both functions to ensure fallback is called
+    monkeypatch.setattr(graphrag, "llm_intent_cypher", dummy_intent_cypher)
     monkeypatch.setattr(graphrag, "llm_fallback", dummy_fallback)
 
     client = TestClient(app)

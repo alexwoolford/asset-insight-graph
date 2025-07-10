@@ -1,921 +1,753 @@
+"""GraphRAG implementation using intelligent Cypher generation.
+
+This module provides intelligent querying capabilities using:
+- Template-based Cypher generation (no more GROUP BY nonsense)
+- Schema-aware query patterns
+- Proper validation and fallbacks
+- LLM-powered intent classification
+"""
+
 from __future__ import annotations
 
 import os
-import re
 import asyncio
+import re
 from typing import Any, Dict, List, Optional
+from enum import Enum
 
 import openai
-import neo4j.time
+from langchain_openai import ChatOpenAI
+from langchain_neo4j import Neo4jGraph
+from pydantic import BaseModel
 
 from .config import Settings, get_driver
 
-def convert_neo4j_types(obj):
-    """Convert Neo4j types to JSON-serializable types."""
-    if isinstance(obj, neo4j.time.Date):
-        return obj.iso_format()
-    elif isinstance(obj, neo4j.time.DateTime):
-        return obj.iso_format()
-    elif isinstance(obj, neo4j.time.Time):
-        return obj.iso_format()
-    elif isinstance(obj, list):
-        return [convert_neo4j_types(item) for item in obj]
-    elif isinstance(obj, dict):
-        return {key: convert_neo4j_types(value) for key, value in obj.items()}
-    else:
-        return obj
+class QueryCategory(Enum):
+    """Query categories for intent classification."""
+    ECONOMIC_DATA = "economic_data"
+    GEOGRAPHIC_ASSETS = "geographic_assets" 
+    PORTFOLIO_ANALYSIS = "portfolio_analysis"
+    SEMANTIC_SEARCH = "semantic_search"
+    TREND_ANALYSIS = "trend_analysis"
+    UNKNOWN = "unknown"
 
-# Add state mapping for abbreviations and case insensitivity
-STATE_MAPPINGS = {
-    # Full names (case insensitive)
-    "california": "California",
-    "texas": "Texas", 
-    "new york": "New York",
-    "georgia": "Georgia",
-    "illinois": "Illinois",
-    "wisconsin": "Wisconsin",
-    "missouri": "Missouri",
-    # Abbreviations
-    "ca": "California",
-    "tx": "Texas",
-    "ny": "New York", 
-    "ga": "Georgia",
-    "il": "Illinois",
-    "wi": "Wisconsin",
-    "mo": "Missouri",
-    # Common typos
-    "californa": "California",
-    "califorina": "California",
-    "texsa": "Texas",
-    "new yourk": "New York",
-}
+class IntentClassification(BaseModel):
+    """Result of intent classification."""
+    category: QueryCategory
+    confidence: float
+    reasoning: str
 
-def normalize_state_name(state_input: str) -> str:
-    """Normalize state name to handle case sensitivity, abbreviations, and typos."""
-    if not state_input:
-        return state_input
+class CypherTemplate:
+    """Smart Cypher template that generates valid queries."""
     
-    # Try exact match first (case insensitive)
-    normalized = state_input.lower().strip()
-    if normalized in STATE_MAPPINGS:
-        return STATE_MAPPINGS[normalized]
-    
-    # Try fuzzy matching for common typos
-    for typo, correct in STATE_MAPPINGS.items():
-        if abs(len(typo) - len(normalized)) <= 2:  # Similar length
-            # Simple character difference check
-            diff_count = sum(1 for a, b in zip(typo, normalized) if a != b)
-            if diff_count <= 2:  # Allow 2 character differences
-                return correct
-    
-    # If no match found, return capitalized version
-    return state_input.title()
-
-# Query patterns using Neo4j native geospatial Point types
-# NOTE: Order matters! More specific patterns should come first
-GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
-    # FRED economic queries (most specific - must come first)
-    # Flexible unemployment patterns for California
-    (
-        re.compile(r"(?:unemployment|jobless).*(?:rate|percent).*(?:in\s+)?california|california.*(?:unemployment|jobless).*(?:rate|percent)", re.I),
-        """MATCH (mt:MetricType {name: "California Unemployment Rate"})-[:TAIL]->(latest:MetricValue)
-           RETURN "California" AS state, 
-                  latest.value AS unemployment_rate,
-                  latest.date AS as_of_date,
-                  mt.name AS metric_name""",
-    ),
-    # Flexible unemployment patterns for Texas
-    (
-        re.compile(r"(?:unemployment|jobless).*(?:rate|percent).*(?:in\s+)?texas|texas.*(?:unemployment|jobless).*(?:rate|percent)", re.I),
-        """MATCH (mt:MetricType {name: "Texas Unemployment Rate"})-[:TAIL]->(latest:MetricValue)
-           RETURN "Texas" AS state, 
-                  latest.value AS unemployment_rate,
-                  latest.date AS as_of_date,
-                  mt.name AS metric_name""",
-    ),
-    # Flexible unemployment patterns for Georgia
-    (
-        re.compile(r"(?:unemployment|jobless).*(?:rate|percent).*(?:in\s+)?georgia|georgia.*(?:unemployment|jobless).*(?:rate|percent)", re.I),
-        """MATCH (mt:MetricType {name: "Georgia Unemployment Rate"})-[:TAIL]->(latest:MetricValue)
-           RETURN "Georgia" AS state, 
-                  latest.value AS unemployment_rate,
-                  latest.date AS as_of_date,
-                  mt.name AS metric_name""",
-    ),
-    # Trend/historical patterns (must come before current rate patterns)
-    (
-        re.compile(r"(?:trend|trends?|history|historical|over time|change).*(?:30\s*year|mortgage).*(?:rate|percent)|(?:30\s*year|mortgage).*(?:rate|percent).*(?:trend|trends?|history|historical|over time|change)", re.I),
-        """MATCH (mt:MetricType {name: "30-Year Mortgage Rate"})-[:HEAD]->(first:MetricValue)
-           MATCH (mt)-[:TAIL]->(last:MetricValue)
-           RETURN mt.name AS metric_name,
-                  first.value AS start_value,
-                  first.date AS start_date,
-                  last.value AS end_value,
-                  last.date AS end_date,
-                  last.value - first.value AS change,
-                  round(((last.value - first.value) / first.value) * 100, 2) AS percent_change""",
-    ),
-    (
-        re.compile(r"(?:trend|trends?|history|historical|over time|change).*(?:federal\s+funds?|fed\s+funds?|ffr).*(?:rate|percent)|(?:federal\s+funds?|fed\s+funds?|ffr).*(?:rate|percent).*(?:trend|trends?|history|historical|over time|change)", re.I),
-        """MATCH (mt:MetricType {name: "Federal Funds Rate"})-[:HEAD]->(first:MetricValue)
-           MATCH (mt)-[:TAIL]->(last:MetricValue)
-           RETURN mt.name AS metric_name,
-                  first.value AS start_value,
-                  first.date AS start_date,
-                  last.value AS end_value,
-                  last.date AS end_date,
-                  last.value - first.value AS change,
-                  round(((last.value - first.value) / first.value) * 100, 2) AS percent_change""",
-    ),
-    (
-        re.compile(r"(?:trend|trends?|history|historical|over time|change).*(?:treasury|10\s*year).*(?:rate|percent|yield)|(?:treasury|10\s*year).*(?:rate|percent|yield).*(?:trend|trends?|history|historical|over time|change)", re.I),
-        """MATCH (mt:MetricType {name: "10-Year Treasury Rate"})-[:HEAD]->(first:MetricValue)
-           MATCH (mt)-[:TAIL]->(last:MetricValue)
-           RETURN mt.name AS metric_name,
-                  first.value AS start_value,
-                  first.date AS start_date,
-                  last.value AS end_value,
-                  last.date AS end_date,
-                  last.value - first.value AS change,
-                  round(((last.value - first.value) / first.value) * 100, 2) AS percent_change""",
-    ),
-    (
-        re.compile(r"(?:trend|trends?|history|historical|over time|change).*(?:interest\s+rates?|rates?)|(?:interest\s+rates?|rates?).*(?:trend|trends?|history|historical|over time|change)", re.I),
-        """MATCH (mt:MetricType)-[:HEAD]->(first:MetricValue)
-           MATCH (mt)-[:TAIL]->(last:MetricValue)
-           WHERE mt.category = "Interest Rate"
-           RETURN mt.name AS metric_name,
-                  first.value AS start_value,
-                  first.date AS start_date,
-                  last.value AS end_value,
-                  last.date AS end_date,
-                  last.value - first.value AS change,
-                  round(((last.value - first.value) / first.value) * 100, 2) AS percent_change
-           ORDER BY ABS(change) DESC""",
-    ),
-    
-    # Flexible interest rate patterns (current values)
-    (
-        re.compile(r"(?:current|latest|today's)?\s*(?:interest\s+rates?|rates?)", re.I),
-        """MATCH (mt:MetricType)-[:TAIL]->(latest:MetricValue)
-           WHERE mt.category = "Interest Rate"
-           RETURN mt.name AS rate_type, 
-                  latest.value AS current_rate,
-                  latest.date AS as_of_date
-           ORDER BY mt.name""",
-    ),
-    (
-        re.compile(r"(?:federal\s+funds?|fed\s+funds?|ffr).*(?:rate|percent)|(?:rate|percent).*(?:federal\s+funds?|fed\s+funds?|ffr)", re.I),
-        """MATCH (mt:MetricType {name: "Federal Funds Rate"})-[:TAIL]->(latest:MetricValue)
-           RETURN mt.name AS rate_type, 
-                  latest.value AS current_rate,
-                  latest.date AS as_of_date""",
-    ),
-    (
-        re.compile(r"(?:treasury|10\s*year).*(?:rate|percent|yield)|(?:rate|percent|yield).*(?:treasury|10\s*year)", re.I),
-        """MATCH (mt:MetricType {name: "10-Year Treasury Rate"})-[:TAIL]->(latest:MetricValue)
-           RETURN mt.name AS rate_type, 
-                  latest.value AS current_rate,
-                  latest.date AS as_of_date""",
-    ),
-    (
-        re.compile(r"(?:mortgage|30\s*year).*(?:rate|percent)|(?:rate|percent).*(?:mortgage|30\s*year)", re.I),
-        """MATCH (mt:MetricType {name: "30-Year Mortgage Rate"})-[:TAIL]->(latest:MetricValue)
-           RETURN mt.name AS rate_type, 
-                  latest.value AS current_rate,
-                  latest.date AS as_of_date""",
-    ),
-    # California specific (most specific geographic query)
-    (
-        re.compile(r"california assets|assets in california", re.I),
-        """MATCH (a:Asset)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State {name: "California"})
-           RETURN a.name AS asset_name, c.name AS city,
-                  a.building_type AS building_type,
-                  a.location.latitude AS latitude,
-                  a.location.longitude AS longitude""",
-    ),
-    # Regional queries (more specific than city)
-    (
-        re.compile(
-            r"assets in the (?P<region>west|east|northeast|southeast|midwest|southwest)",
-            re.I,
-        ),
-        """MATCH (a:Asset)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State)-[:PART_OF]->(r:Region)
-           WHERE toLower(r.name) = toLower($region)
-           RETURN a.name AS asset_name, c.name + ', ' + s.name AS location,
-                  a.building_type AS building_type""",
-    ),
-    # State queries (more specific than city)
-    (
-        re.compile(r"assets in (?P<state>.+?)(?:\s+state)?$", re.I),
-        """MATCH (a:Asset)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State {name: $normalized_state})
-           RETURN a.name AS asset_name, c.name AS city, 
-                  a.building_type AS building_type""",
-    ),
-    # Platform queries
-    (
-        re.compile(r"(?P<platform>real estate|infrastructure|credit) assets", re.I),
-        """MATCH (a:Asset)-[:BELONGS_TO]->(p:Platform)
-           WHERE toLower(p.name) CONTAINS toLower($platform)
-           RETURN a.name AS asset_name, p.name AS platform, 
-                  a.building_type AS building_type""",
-    ),
-    # Investment type queries
-    (
-        re.compile(
-            r"(?P<investment_type>direct real estate|infrastructure investment|real estate credit)",
-            re.I,
-        ),
-        """MATCH (a:Asset)-[:HAS_INVESTMENT_TYPE]->(it:InvestmentType)
-           WHERE toLower(it.name) = toLower($investment_type)
-           RETURN a.name AS asset_name, it.name AS investment_type""",
-    ),
-    # Combined building type and state queries (more specific)
-    (
-        re.compile(
-            r"(?P<building_type>commercial|residential|infrastructure|mixed use)\s+(?:buildings?|properties?)\s+in\s+(?P<state>.+?)(?:\s+state)?$",
-            re.I,
-        ),
-        """MATCH (a:Asset)-[:HAS_TYPE]->(bt:BuildingType), 
-                 (a)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State)
-           WHERE toLower(bt.name) CONTAINS toLower($building_type)
-             AND toLower(s.name) = toLower($normalized_state)
-           RETURN a.name AS asset_name, c.name AS city, 
-                  bt.name AS building_type, s.name AS state""",
-    ),
-    # Building type analysis (general)
-    (
-        re.compile(
-            r"(?P<building_type>commercial|residential|infrastructure|mixed use) buildings?",
-            re.I,
-        ),
-        """MATCH (a:Asset)-[:HAS_TYPE]->(bt:BuildingType)
-           WHERE toLower(bt.name) CONTAINS toLower($building_type)
-           RETURN a.name AS asset_name, bt.name AS building_type""",
-    ),
-    # Portfolio analysis
-    (
-        re.compile(r"portfolio distribution|asset distribution", re.I),
-        """MATCH (a:Asset)-[:BELONGS_TO]->(p:Platform),
-                 (a)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State)-[:PART_OF]->(r:Region)
-           RETURN p.name AS platform, r.name AS region, 
-                  count(a) AS asset_count
-           ORDER BY platform, asset_count DESC""",
-    ),
-    # Geospatial queries using native Point types
-    (
-        re.compile(
-            r"assets within (?P<distance>\d+)\s*(?P<unit>km|miles?) of (?P<reference>.+)",
-            re.I,
-        ),
-        """MATCH (ref:Asset)-[:LOCATED_IN]->(refCity:City)
-           WHERE toLower(ref.name) CONTAINS toLower($reference) OR toLower(refCity.name) CONTAINS toLower($reference)
-           WITH ref, toInteger($distance) AS distance, $unit AS unit
-           MATCH (a:Asset)
-           WHERE a <> ref AND a.location IS NOT NULL AND ref.location IS NOT NULL
-           WITH a, ref, distance, unit,
-                point.distance(a.location, ref.location) AS distance_meters
-           WHERE (unit IN ['km', 'kilometer'] AND distance_meters <= distance * 1000) OR
-                 (unit IN ['mile', 'miles'] AND distance_meters <= distance * 1609.34)
-           RETURN a.name AS asset_name, ref.name AS reference_asset,
-                  round(distance_meters/1000, 1) AS distance_km,
-                  round(distance_meters/1609.34, 1) AS distance_miles
-           ORDER BY distance_meters""",
-    ),
-    # Geographic clustering using native distance functions
-    (
-        re.compile(r"nearby assets|assets near|geographic clusters?", re.I),
-        """MATCH (a1:Asset), (a2:Asset)
-           WHERE a1 <> a2 AND a1.location IS NOT NULL AND a2.location IS NOT NULL
-           WITH a1, a2, point.distance(a1.location, a2.location) AS distance_meters
-           WHERE distance_meters < 50000
-           RETURN a1.name AS asset1, a2.name AS asset2,
-                  round(distance_meters/1000, 1) AS distance_km
-           ORDER BY distance_meters LIMIT 10""",
-    ),
-    # Assets within a bounding box (geospatial envelope)
-    (
-        re.compile(
-            r"assets in (?P<area>los angeles|la|bay area|san francisco|chicago|new york) area",
-            re.I,
-        ),
-        """WITH CASE toLower($area)
-             WHEN 'los angeles' THEN {minLat: 33.7, maxLat: 34.3, minLon: -118.7, maxLon: -118.0}
-             WHEN 'la' THEN {minLat: 33.7, maxLat: 34.3, minLon: -118.7, maxLon: -118.0}
-             WHEN 'bay area' THEN {minLat: 37.2, maxLat: 37.9, minLon: -122.6, maxLon: -121.5}
-             WHEN 'san francisco' THEN {minLat: 37.2, maxLat: 37.9, minLon: -122.6, maxLon: -121.5}
-             WHEN 'chicago' THEN {minLat: 41.6, maxLat: 42.0, minLon: -87.9, maxLon: -87.5}
-             WHEN 'new york' THEN {minLat: 40.5, maxLat: 40.9, minLon: -74.3, maxLon: -73.7}
-             ELSE {minLat: 0, maxLat: 0, minLon: 0, maxLon: 0}
-           END AS area_bounds
-           MATCH (a:Asset)
-           WHERE a.location IS NOT NULL 
-             AND area_bounds.minLat <= a.location.latitude <= area_bounds.maxLat
-             AND area_bounds.minLon <= a.location.longitude <= area_bounds.maxLon
-           RETURN a.name AS asset_name, 
-                  a.location.latitude AS latitude,
-                  a.location.longitude AS longitude,
-                  a.building_type AS building_type""",
-    ),
-    # Count queries
-    (
-        re.compile(r"how many assets|asset count|total assets", re.I),
-        "MATCH (a:Asset) RETURN count(a) AS total_assets",
-    ),
-    (
-        re.compile(r"how many (?P<node_type>cities|states|regions|platforms)", re.I),
-        """MATCH (c:City), (s:State), (r:Region), (p:Platform)
-           RETURN count(DISTINCT c) AS cities, count(DISTINCT s) AS states, 
-                  count(DISTINCT r) AS regions, count(DISTINCT p) AS platforms""",
-    ),
-    # Vector similarity search patterns
-    (
-        re.compile(r"similar to|like|comparable to|properties matching|assets like", re.I),
-        "VECTOR_SEARCH",  # Special marker for vector search
-    ),
-    (
-        re.compile(r"(?:find|show|search|looking for).*(?:with|having|featuring).*(?:luxury|premium|high-quality|modern|sustainable|ESG|green|tech|innovation)", re.I),
-        "VECTOR_SEARCH",
-    ),
-    (
-        re.compile(r"(?:sustainable|ESG|environmental|green|renewable|clean energy|carbon|climate)", re.I),
-        "VECTOR_SEARCH",
-    ),
-    (
-        re.compile(r"(?:luxury|premium|high-end|institutional|quality|amenities|modern)", re.I),
-        "VECTOR_SEARCH",
-    ),
-
-    (
-        re.compile(r"assets?\s+(?:by|grouped?\s+by)\s+economic\s+(?:environment|context)", re.I),
-        """MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(s:State)-[:HAS_METRIC]->(mt:MetricType)
-           WHERE mt.category = "Labor"
-           MATCH (mt)-[:HAS_VALUE]->(mv:MetricValue)
-           WHERE mv.date >= date() - duration({months: 1})
-           WITH a, s, avg(mv.value) AS recent_unemployment
-           MATCH (a)-[:BELONGS_TO]->(p:Platform)
-           RETURN s.name AS state,
-                  p.name AS platform,
-                  recent_unemployment,
-                  count(a) AS asset_count
-           ORDER BY recent_unemployment ASC, asset_count DESC""",
-    ),
-    (
-        re.compile(r"(?:national\s+)?housing\s+(?:market|metrics?|indicators?)", re.I),
-        """MATCH (c:Country {name: "United States"})-[:HAS_METRIC]->(mt:MetricType)
-           WHERE mt.category = "Housing"
-           MATCH (mt)-[:HAS_VALUE]->(mv:MetricValue)
-           WHERE mv.date >= date() - duration({months: 6})
-           WITH mt.name AS metric_name,
-                avg(mv.value) AS avg_value,
-                max(mv.date) AS latest_date
-           MATCH (a:Asset)-[:BELONGS_TO]->(p:Platform {name: "Real Estate"})
-           RETURN metric_name, avg_value, latest_date, 
-                  count(a) AS real_estate_assets
-           ORDER BY metric_name""",
-    ),
-    (
-                 re.compile(r"(?:portfolio\s+)?risk\s*(?:analysis|volatility|economic)", re.I),
-         """MATCH (s:State)-[:HAS_METRIC]->(mt:MetricType)-[:HAS_VALUE]->(mv:MetricValue)
-            WHERE mv.date >= date() - duration({months: 12})
-            WITH s.name AS state, 
-                 mt.category AS category,
-                 max(mv.value) - min(mv.value) AS volatility
-            MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(s2:State {name: state})
-            MATCH (a)-[:BELONGS_TO]->(p:Platform)
-            RETURN state, p.name AS platform, category,
-                   avg(volatility) AS avg_economic_volatility,
-                   count(a) AS assets_at_risk
-            ORDER BY avg_economic_volatility DESC""",
-    ),
-    
-    # City queries (most general, comes last)
-    (
-        re.compile(r"assets in (?P<city>.+)", re.I),
-        """MATCH (a:Asset)-[:LOCATED_IN]->(c:City {name: $city})
-           RETURN a.name AS asset_name, a.building_type AS building_type, 
-                  a.investment_type AS investment_type""",
-    ),
-]
-
-# Add hybrid query patterns and implementation
-HYBRID_QUERY_PATTERNS = [
-    # Geographic + Semantic patterns (flexible state matching)
-    (
-        re.compile(r"(?:properties|assets)\s+in\s+(?P<state>[^,\s]+(?:\s+[^,\s]+)?)\s+that\s+are\s+(?P<semantic>ESG|sustainable|green|renewable|luxury|premium|modern|tech|innovation)", re.I),
-        "HYBRID_GEOGRAPHIC_SEMANTIC"
-    ),
-    (
-        re.compile(r"(?P<semantic>ESG|sustainable|green|renewable|luxury|premium|modern|tech|innovation)\s+(?:properties|assets)\s+in\s+(?P<state>[^,\s]+(?:\s+[^,\s]+)?)", re.I),
-        "HYBRID_SEMANTIC_GEOGRAPHIC"
-    ),
-    (
-        re.compile(r"show\s+me\s+(?P<semantic>ESG|sustainable|green|renewable|luxury|premium|modern|tech|innovation)\s+(?:properties|assets)\s+in\s+(?P<state>[^,\s]+(?:\s+[^,\s]+)?)", re.I),
-        "HYBRID_SEMANTIC_GEOGRAPHIC"
-    ),
-]
-
-async def perform_vector_search(question: str, limit: int = 5) -> Dict[str, Any]:
-    """Perform vector similarity search for semantic queries."""
-    
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if not openai_key:
-        return {
-            "answer": "Vector search requires OpenAI API key to be configured.",
-            "cypher": None,
-            "data": [],
-            "question": question,
-            "pattern_matched": False,
-            "vector_search": False,
+    def __init__(self):
+        self.portfolio_templates = {
+            "platform": """
+                MATCH (a:Asset) 
+                RETURN a.platform AS category, COUNT(a) AS count 
+                ORDER BY count DESC
+            """,
+            "region": """
+                MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(:State)-[:PART_OF]->(r:Region) 
+                RETURN r.name AS category, COUNT(a) AS count 
+                ORDER BY count DESC
+            """,
+            "investment_type": """
+                MATCH (a:Asset) 
+                RETURN a.investment_type AS category, COUNT(a) AS count 
+                ORDER BY count DESC
+            """,
+            "building_type": """
+                MATCH (a:Asset) 
+                RETURN a.building_type AS category, COUNT(a) AS count 
+                ORDER BY count DESC
+            """,
+            "state": """
+                MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(s:State) 
+                RETURN s.name AS category, COUNT(a) AS count 
+                ORDER BY count DESC
+            """
+        }
+        
+        self.geographic_templates = {
+            "state_filter": """
+                MATCH (a:Asset) 
+                WHERE a.state = $state_name
+                RETURN a.name, a.city, a.state, a.building_type, a.platform
+                ORDER BY a.name
+            """,
+            "city_filter": """
+                MATCH (a:Asset) 
+                WHERE a.city = $city_name
+                RETURN a.name, a.city, a.state, a.building_type, a.platform
+                ORDER BY a.name
+            """,
+            "region_filter": """
+                MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(:State)-[:PART_OF]->(r:Region {{name: $region_name}})
+                RETURN a.name, a.city, a.state, a.building_type, a.platform
+                ORDER BY a.name
+            """,
+            "all_assets": """
+                MATCH (a:Asset)
+                RETURN a.name, a.city, a.state, a.building_type, a.platform
+                ORDER BY a.state, a.city, a.name
+            """
+        }
+        
+        self.semantic_templates = {
+            "property_search": """
+                MATCH (a:Asset) 
+                WHERE a.property_description CONTAINS $keyword1 
+                   OR a.property_description CONTAINS $keyword2 
+                   OR a.property_description CONTAINS $keyword3
+                RETURN a.name, a.city, a.state, a.building_type, a.property_description
+                ORDER BY a.name
+            """
+        }
+        
+        self.economic_templates = {
+            "latest_metric": """
+                MATCH (mt:MetricType {{name: $metric_name}})-[:TAIL]->(mv:MetricValue)
+                RETURN mt.name AS metric, mv.value AS current_value, mv.date AS current_date
+            """,
+            "trend_analysis": """
+                MATCH (mt:MetricType {{name: $metric_name}})-[:HEAD]->(first:MetricValue)
+                MATCH (mt)-[:TAIL]->(last:MetricValue)
+                RETURN mt.name AS metric, 
+                       first.value AS start_value, first.date AS start_date,
+                       last.value AS end_value, last.date AS end_date,
+                       last.value - first.value AS change
+            """
+        }
+        
+        # Map states to regions for smart routing
+        self.state_regions = {
+            "California": "West",
+            "Texas": "Southwest", 
+            "Illinois": "Midwest",
+            "Missouri": "Midwest",
+            "Wisconsin": "Midwest"
+        }
+        
+        # Economic metrics mapping
+        self.economic_metrics = {
+            "unemployment": "Unemployment Rate",
+            "california unemployment": "California Unemployment Rate",
+            "texas unemployment": "Texas Unemployment Rate", 
+            "mortgage": "30-Year Mortgage Rate",
+            "30 year": "30-Year Mortgage Rate",
+            "federal funds": "Federal Funds Rate",
+            "fed funds": "Federal Funds Rate"
         }
     
-    try:
-        # Initialize OpenAI client
-        client = openai.OpenAI(api_key=openai_key)
+    def generate_portfolio_query(self, question: str) -> tuple[str, dict]:
+        """Generate portfolio distribution queries."""
+        question_lower = question.lower()
         
-        # Generate embedding for the query
-        response = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=question.replace("\n", " "),
-            encoding_format="float"
-        )
-        query_embedding = response.data[0].embedding
-        
-        # Perform vector similarity search
-        vector_cypher = """
-        CALL db.index.vector.queryNodes('asset_description_vector', $limit, $query_embedding)
-        YIELD node, score
-        RETURN node.name AS asset_name,
-               node.city AS city,
-               node.state AS state,
-               node.platform AS platform,
-               node.building_type AS building_type,
-
-               score AS similarity_score,
-               node.property_description AS description
-        ORDER BY score DESC
-        """
-        
-        # Execute vector search
-        driver = get_driver()
-        settings = Settings()
-        async with driver.session(database=settings.neo4j_db) as session:
-            result = await session.run(vector_cypher, {
-                "query_embedding": query_embedding,
-                "limit": limit
-            })
-            data = await result.data()
-        
-        # Generate summary
-        if data:
-            top_matches = [f"{item['asset_name']} (similarity: {item['similarity_score']:.3f})" 
-                          for item in data[:3]]
-            summary = f"Found {len(data)} semantically similar assets: {', '.join(top_matches)}"
+        if "platform" in question_lower:
+            return self.portfolio_templates["platform"], {}
+        elif "region" in question_lower:
+            return self.portfolio_templates["region"], {}
+        elif "investment" in question_lower and "type" in question_lower:
+            return self.portfolio_templates["investment_type"], {}
+        elif "building" in question_lower and "type" in question_lower:
+            return self.portfolio_templates["building_type"], {}
+        elif "state" in question_lower:
+            return self.portfolio_templates["state"], {}
         else:
-            summary = "No semantically similar assets found."
-        
-        return {
-            "answer": summary,
-            "cypher": vector_cypher,
-            "data": data,
-            "question": question,
-            "pattern_matched": True,
-            "vector_search": True,
-            "search_type": "semantic_similarity"
-        }
-        
-    except Exception as e:
-        return {
-            "answer": f"Vector search error: {str(e)}",
-            "cypher": None,
-            "data": [],
-            "question": question,
-            "pattern_matched": False,
-            "vector_search": False,
-        }
-
-async def perform_hybrid_search(question: str, state: str, semantic_term: str, limit: int = 5) -> Dict[str, Any]:
-    """Perform hybrid search: geographic filter + semantic ranking."""
+            # Default to platform distribution
+            return self.portfolio_templates["platform"], {}
     
-    # Normalize the state name
-    normalized_state = normalize_state_name(state)
+    def generate_geographic_query(self, question: str) -> tuple[str, dict]:
+        """Generate geographic asset queries."""
+        question_lower = question.lower()
+        params = {}
+        
+        # Extract location mentions
+        states = ["california", "texas", "illinois", "missouri", "wisconsin"]
+        cities = ["los angeles", "houston", "austin", "chicago", "milwaukee", "appleton", "west hollywood"]
+        regions = ["west", "southwest", "midwest", "northeast", "southeast"]
+        
+        for state in states:
+            if state in question_lower:
+                params["state_name"] = state.title()
+                return self.geographic_templates["state_filter"], params
+        
+        for city in cities:
+            if city in question_lower:
+                params["city_name"] = city.title()
+                return self.geographic_templates["city_filter"], params
+                
+        for region in regions:
+            if region in question_lower:
+                params["region_name"] = region.title()
+                return self.geographic_templates["region_filter"], params
+        
+        # Default to all assets
+        return self.geographic_templates["all_assets"], {}
     
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if not openai_key:
-        return {
-            "answer": "Hybrid search requires OpenAI API key to be configured.",
-            "cypher": None,
-            "data": [],
-            "question": question,
-            "pattern_matched": False,
-            "hybrid_search": False,
-        }
-    
-    try:
-        # Initialize OpenAI client
-        client = openai.OpenAI(api_key=openai_key)
+    def generate_semantic_query(self, question: str) -> tuple[str, dict]:
+        """Generate semantic search queries."""
+        question_lower = question.lower()
         
-        # Generate embedding for the semantic term
-        response = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=semantic_term.replace("\n", " "),
-            encoding_format="float"
-        )
-        query_embedding = response.data[0].embedding
+        # Define semantic keyword groups
+        sustainability_keywords = ["sustainable", "ESG", "renewable", "green", "environmental", "solar", "energy"]
+        luxury_keywords = ["luxury", "premium", "high-end", "upscale", "exclusive"]
         
-        # Hybrid search: First filter by state, then rank by semantic similarity
-        hybrid_cypher = """
-        // Step 1: Get all assets in the specified state with embeddings
-        MATCH (a:Asset)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State {name: $state})
-        WHERE a.description_embedding IS NOT NULL
-        
-        // Step 2: Calculate cosine similarity manually
-        WITH a, c, s,
-             reduce(dot = 0.0, i IN range(0, size(a.description_embedding)-1) | 
-                dot + a.description_embedding[i] * $query_embedding[i]) AS dot_product,
-             sqrt(reduce(norm_a = 0.0, x IN a.description_embedding | norm_a + x * x)) AS norm_a,
-             sqrt(reduce(norm_q = 0.0, x IN $query_embedding | norm_q + x * x)) AS norm_q
-        
-        WITH a, c, s, dot_product / (norm_a * norm_q) AS similarity_score
-        
-        // Step 3: Return results ranked by semantic relevance
-        RETURN a.name AS asset_name,
-               c.name AS city,
-               s.name AS state,
-               a.platform AS platform,
-               a.building_type AS building_type,
-
-               similarity_score,
-               a.property_description AS description
-        ORDER BY similarity_score DESC
-        LIMIT $limit
-        """
-        
-        # Execute hybrid search
-        driver = get_driver()
-        settings = Settings()
-        async with driver.session(database=settings.neo4j_db) as session:
-            result = await session.run(hybrid_cypher, {
-                "state": normalized_state,
-                "query_embedding": query_embedding,
-                "limit": limit
+        params = {}
+        if any(keyword in question_lower for keyword in sustainability_keywords):
+            params.update({
+                "keyword1": "sustainable",
+                "keyword2": "ESG", 
+                "keyword3": "renewable"
             })
-            data = await result.data()
-        
-        # Generate summary
-        if data:
-            asset_summaries = []
-            for item in data:
-                score = item['similarity_score']
-                asset_summaries.append(f"{item['asset_name']} (similarity: {score:.3f})")
-            
-            summary = f"Found {len(data)} properties in {normalized_state} ranked by {semantic_term} relevance: " + ", ".join(asset_summaries)
+        elif any(keyword in question_lower for keyword in luxury_keywords):
+            params.update({
+                "keyword1": "luxury",
+                "keyword2": "premium",
+                "keyword3": "upscale"
+            })
         else:
-            summary = f"No properties found in {normalized_state} with vector embeddings for semantic ranking."
+            # Default sustainable search
+            params.update({
+                "keyword1": "sustainable",
+                "keyword2": "ESG",
+                "keyword3": "renewable"
+            })
         
-        return {
-            "answer": summary,
-            "cypher": hybrid_cypher,
-            "data": data,
-            "question": question,
-            "pattern_matched": True,
-            "hybrid_search": True,
-            "search_type": "Hybrid (Geographic Filter + Semantic Ranking)",
-            "filter_criteria": f"State: {normalized_state} (normalized from '{state}')",
-            "semantic_criteria": f"Similarity to: {semantic_term}"
-        }
-        
-    except Exception as e:
-        return {
-            "answer": f"Error performing hybrid search: {str(e)}",
-            "cypher": None,
-            "data": [],
-            "question": question,
-            "pattern_matched": False,
-            "hybrid_search": False,
-            "error": str(e)
-        }
-
-
-async def answer_geospatial(question: str) -> Dict[str, Any]:
-    """Return answer dictionary using geospatial patterns and vector search."""
-
-    # First check for hybrid query patterns
-    for pattern, search_type in HYBRID_QUERY_PATTERNS:
-        match = pattern.search(question)
-        if match:
-            params = match.groupdict()
-            state = params.get('state')
-            semantic = params.get('semantic')
-            
-            if state and semantic:
-                return await perform_hybrid_search(question, state, semantic)
+        return self.semantic_templates["property_search"], params
     
-    # Use pattern matching for all queries
-    for pattern, cypher in GEOSPATIAL_RULES:
-        match = pattern.search(question)
-        if match:
-            params = match.groupdict()
-            
-            # Normalize state parameter if present
-            if 'state' in params and params['state']:
-                params['normalized_state'] = normalize_state_name(params['state'])
-            
-            # Check if this is a vector search pattern
-            if cypher == "VECTOR_SEARCH":
-                return await perform_vector_search(question)
-            
-            # Regular graph query
-            driver = get_driver()
+    def generate_economic_query(self, question: str) -> tuple[str, dict]:
+        """Generate economic data queries."""
+        question_lower = question.lower()
+        
+        # Find the metric
+        metric_name = None
+        for key, value in self.economic_metrics.items():
+            if key in question_lower:
+                metric_name = value
+                break
+        
+        if not metric_name:
+            metric_name = "California Unemployment Rate"  # Default
+        
+        params = {"metric_name": metric_name}
+        
+        if "trend" in question_lower or "change" in question_lower:
+            return self.economic_templates["trend_analysis"], params
+        else:
+            return self.economic_templates["latest_metric"], params
+
+class GraphRAG:
+    """Intelligent GraphRAG with template-based Cypher generation."""
+    
+    def __init__(self):
+        self.llm = self._initialize_llm()
+        self.cypher_templates = CypherTemplate()
+        
+    def _initialize_llm(self) -> ChatOpenAI:
+        """Initialize the LLM for intent classification only."""
+        return ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,
+            openai_api_key=os.getenv("OPENAI_API_KEY")
+        )
+    
+    async def classify_intent(self, question: str) -> IntentClassification:
+        """Classify user intent using keyword detection with priority."""
+        
+        question_lower = question.lower()
+        
+        # Check for semantic keywords FIRST (highest priority)
+        semantic_keywords = ["sustainable", "ESG", "renewable", "green", "luxury", "premium", "high-end", "environmental", "carbon", "solar", "energy", "eco-friendly", "similar to", "like", "comparable"]
+        
+        if any(keyword.lower() in question_lower for keyword in semantic_keywords):
+            return IntentClassification(
+                category=QueryCategory.SEMANTIC_SEARCH,
+                confidence=0.95,
+                reasoning=f"Contains semantic keywords requiring vector search"
+            )
+        
+        # Portfolio analysis keywords (second priority)
+        portfolio_keywords = ["portfolio", "distribution", "how many", "count", "platform", "breakdown"]
+        if any(keyword in question_lower for keyword in portfolio_keywords):
+            return IntentClassification(
+                category=QueryCategory.PORTFOLIO_ANALYSIS,
+                confidence=0.95,
+                reasoning="Question asks about portfolio composition or asset counts"
+            )
+        
+        # Geographic keywords (third priority - after semantic check)
+        geographic_keywords = ["california", "texas", "los angeles", "houston", "austin", "properties in", "assets in", "located in"]
+        if any(keyword in question_lower for keyword in geographic_keywords):
+            # Check if it's ONLY geographic without semantic terms
+            return IntentClassification(
+                category=QueryCategory.GEOGRAPHIC_ASSETS,
+                confidence=0.90,
+                reasoning="Question refers to specific geographic locations"
+            )
+        
+        # Economic keywords  
+        economic_keywords = ["unemployment", "interest rate", "mortgage", "federal funds", "economic", "rate"]
+        if any(keyword in question_lower for keyword in economic_keywords):
+            return IntentClassification(
+                category=QueryCategory.ECONOMIC_DATA,
+                confidence=0.90,
+                reasoning="Question asks about economic indicators"
+            )
+        
+        # Trend keywords
+        trend_keywords = ["trend", "change", "over time", "historical", "compare"]
+        if any(keyword in question_lower for keyword in trend_keywords):
+            return IntentClassification(
+                category=QueryCategory.TREND_ANALYSIS,
+                confidence=0.85,
+                reasoning="Question asks about trends or changes over time"
+            )
+        
+        return IntentClassification(
+            category=QueryCategory.UNKNOWN,
+            confidence=0.5,
+            reasoning="Could not classify query into known categories"
+        )
+    
+    async def execute_cypher_query(self, cypher: str, params: dict = None) -> List[Dict]:
+        """Execute Cypher query safely with parameters."""
+        try:
+            from .config import get_driver, Settings
             settings = Settings()
+            driver = get_driver()
+            
             async with driver.session(database=settings.neo4j_db) as session:
-                result = await session.run(cypher, params)
+                result = await session.run(cypher, params or {})
                 data = await result.data()
+                return data
+        except Exception as e:
+            print(f"Cypher execution error: {e}")
+            return []
+    
+    async def _vector_search_tool(self, question: str) -> str:
+        """Perform semantic vector search on asset descriptions."""
+        try:
+            openai_key = os.getenv("OPENAI_API_KEY")
+            if not openai_key:
+                return "Vector search requires OpenAI API key to be configured."
+            
+            # Initialize OpenAI client
+            import openai
+            client = openai.OpenAI(api_key=openai_key)
+            
+            # Generate embedding for the query
+            response = client.embeddings.create(
+                model="text-embedding-3-small",
+                input=question.replace("\n", " "),
+                encoding_format="float"
+            )
+            query_embedding = response.data[0].embedding
+            
+            # Perform vector similarity search
+            vector_cypher = """
+            CALL db.index.vector.queryNodes('asset_description_vector', $limit, $query_embedding)
+            YIELD node, score
+            RETURN node.name AS asset_name,
+                   node.city AS city,
+                   node.state AS state,
+                   node.platform AS platform,
+                   node.building_type AS building_type,
+                   score AS similarity_score,
+                   node.property_description AS description
+            ORDER BY score DESC
+            """
+            
+            # Execute vector search using Neo4j driver
+            from .config import get_driver, Settings
+            settings = Settings()
+            driver = get_driver()
+            
+            async with driver.session(database=settings.neo4j_db) as session:
+                result = await session.run(vector_cypher, {
+                    "query_embedding": query_embedding,
+                    "limit": 5
+                })
+                data = await result.data()
+            
+            if data:
+                results = []
+                for item in data:
+                    results.append(f"{item['asset_name']} ({item['city']}, {item['state']}) - {item['building_type']} (similarity: {item['similarity_score']:.3f})")
+                return f"Found {len(data)} semantically similar assets: " + ", ".join(results[:3])
+            else:
+                return "No semantically similar assets found."
+                
+        except Exception as e:
+            return f"Vector search error: {str(e)}"
 
-            # Convert Neo4j types to JSON-serializable types
-            data = convert_neo4j_types(data)
-
-            summary = generate_geospatial_summary(question, data, cypher)
-
+    async def answer_question(self, question: str) -> Dict[str, Any]:
+        """Main entry point for answering questions."""
+        
+        # Step 1: Classify intent
+        intent = await self.classify_intent(question)
+        
+        # Step 2: Route to appropriate handler
+        if intent.category == QueryCategory.SEMANTIC_SEARCH:
+            return await self._handle_semantic_query(question, intent)
+        elif intent.category == QueryCategory.PORTFOLIO_ANALYSIS:
+            return await self._handle_portfolio_query(question, intent)
+        elif intent.category == QueryCategory.GEOGRAPHIC_ASSETS:
+            return await self._handle_geographic_query(question, intent)
+        elif intent.category == QueryCategory.ECONOMIC_DATA:
+            return await self._handle_economic_query(question, intent)
+        elif intent.category == QueryCategory.TREND_ANALYSIS:
+            return await self._handle_trend_query(question, intent)
+        else:
+            return await self._handle_general_query(question, intent)
+    
+    async def _handle_portfolio_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
+        """Handle portfolio analysis queries."""
+        try:
+            cypher, params = self.cypher_templates.generate_portfolio_query(question)
+            data = await self.execute_cypher_query(cypher, params)
+            
+            formatted_answer = self._format_portfolio_table(data)
+            
             return {
-                "answer": summary,
-                "cypher": cypher,
+                "answer": formatted_answer,
+                "cypher": cypher.strip(),
                 "data": data,
                 "question": question,
                 "pattern_matched": True,
-                "geospatial_enabled": True,
+                "query_type": "portfolio_template_generated",
+                "intent_classification": {
+                    "category": intent.category.value,
+                    "confidence": intent.confidence,
+                    "reasoning": intent.reasoning
+                },
+                "system_used": "graphrag",
+                "geospatial_enabled": True
+            }
+        except Exception as e:
+            return {
+                "answer": f"Portfolio query failed: {str(e)}",
+                "cypher": None,
+                "data": [],
+                "question": question,
+                "pattern_matched": False,
+                "error": str(e)
+            }
+    
+    async def _handle_geographic_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
+        """Handle geographic asset queries."""
+        try:
+            cypher, params = self.cypher_templates.generate_geographic_query(question)
+            data = await self.execute_cypher_query(cypher, params)
+            
+            formatted_answer = self._format_asset_table(data)
+            
+            return {
+                "answer": formatted_answer,
+                "cypher": cypher.strip(),
+                "data": data,
+                "question": question,
+                "pattern_matched": True,
+                "query_type": "geographic_template_generated",
+                "intent_classification": {
+                    "category": intent.category.value,
+                    "confidence": intent.confidence,
+                    "reasoning": intent.reasoning
+                },
+                "system_used": "graphrag",
+                "geospatial_enabled": True
+            }
+        except Exception as e:
+            return {
+                "answer": f"Geographic query failed: {str(e)}",
+                "cypher": None,
+                "data": [],
+                "question": question,
+                "pattern_matched": False,
+                "error": str(e)
+            }
+    
+    async def _handle_semantic_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
+        """Handle semantic search queries using vector similarity."""
+        try:
+            # Use vector search for semantic queries
+            vector_result = await self._vector_search_tool(question)
+            
+            # Also try template-based semantic search as backup
+            cypher, params = self.cypher_templates.generate_semantic_query(question)
+            backup_data = await self.execute_cypher_query(cypher, params)
+            
+            # Prefer vector search results
+            if "Found" in vector_result and "semantically similar" in vector_result:
+                answer = vector_result
+                data = backup_data  # Include backup data for context
+                cypher_query = cypher.strip()
+            elif backup_data:
+                answer = self._format_asset_table(backup_data)
+                data = backup_data
+                cypher_query = cypher.strip()
+            else:
+                answer = "No assets found matching your semantic search criteria."
+                data = []
+                cypher_query = cypher.strip()
+            
+            return {
+                "answer": answer,
+                "cypher": cypher_query,
+                "data": data,
+                "question": question,
+                "pattern_matched": True,
+                "query_type": "semantic_vector_search",
+                "vector_search": True,
+                "intent_classification": {
+                    "category": intent.category.value,
+                    "confidence": intent.confidence,
+                    "reasoning": intent.reasoning
+                },
+                "system_used": "graphrag",
+                "geospatial_enabled": True
+            }
+            
+        except Exception as e:
+            return {
+                "answer": f"Semantic search failed: {str(e)}",
+                "cypher": None,
+                "data": [],
+                "question": question,
+                "pattern_matched": False,
+                "error": str(e),
+                "vector_search": False
+            }
+    
+    async def _handle_economic_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
+        """Handle economic data queries."""
+        try:
+            cypher, params = self.cypher_templates.generate_economic_query(question)
+            data = await self.execute_cypher_query(cypher, params)
+            
+            formatted_answer = self._format_economic_data(data)
+            
+            return {
+                "answer": formatted_answer,
+                "cypher": cypher.strip(),
+                "data": data,
+                "question": question,
+                "pattern_matched": True,
+                "query_type": "economic_template_generated",
+                "intent_classification": {
+                    "category": intent.category.value,
+                    "confidence": intent.confidence,
+                    "reasoning": intent.reasoning
+                },
+                "system_used": "graphrag",
+                "geospatial_enabled": True
+            }
+        except Exception as e:
+            return {
+                "answer": f"Economic query failed: {str(e)}",
+                "cypher": None,
+                "data": [],
+                "question": question,
+                "pattern_matched": False,
+                "error": str(e)
+            }
+    
+    async def _handle_trend_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
+        """Handle trend analysis queries."""
+        try:
+            cypher, params = self.cypher_templates.generate_economic_query(question)  # Use economic templates for trends
+            data = await self.execute_cypher_query(cypher, params)
+            
+            if data:
+                formatted_answer = self._format_economic_data(data)
+            else:
+                formatted_answer = f"Trend analysis for: {question}"
+            
+            return {
+                "answer": formatted_answer,
+                "cypher": cypher.strip(),
+                "data": data,
+                "question": question,
+                "pattern_matched": True,
+                "query_type": "trend_template_generated",
+                "intent_classification": {
+                    "category": intent.category.value,
+                    "confidence": intent.confidence,
+                    "reasoning": intent.reasoning
+                },
+                "system_used": "graphrag",
+                "geospatial_enabled": True
+            }
+            
+        except Exception as e:
+            return {
+                "answer": f"Trend analysis failed: {str(e)}",
+                "cypher": None,
+                "data": [],
+                "question": question,
+                "pattern_matched": False,
+                "error": str(e)
+            }
+    
+    async def _handle_general_query(self, question: str, intent: IntentClassification) -> Dict[str, Any]:
+        """Handle general queries with fallback logic."""
+        try:
+            # Try portfolio query as fallback
+            cypher, params = self.cypher_templates.generate_portfolio_query(question)
+            data = await self.execute_cypher_query(cypher, params)
+            
+            if data:
+                formatted_answer = self._format_portfolio_table(data)
+            else:
+                formatted_answer = "I couldn't find specific information for that question. Try asking about portfolio distribution, assets in specific locations, or economic indicators."
+            
+            return {
+                "answer": formatted_answer,
+                "cypher": cypher.strip() if data else "",
+                "data": data,
+                "question": question,
+                "pattern_matched": False,
+                "query_type": "general_fallback",
+                "intent_classification": {
+                    "category": intent.category.value,
+                    "confidence": intent.confidence,
+                    "reasoning": intent.reasoning
+                },
+                "system_used": "graphrag",
+                "geospatial_enabled": True
+            }
+        except Exception as e:
+            return {
+                "answer": f"I couldn't process that question: {str(e)}. Try rephrasing or asking about assets, economic data, or portfolio information.",
+                "cypher": None,
+                "data": [],
+                "question": question,
+                "pattern_matched": False,
+                "error": str(e)
             }
 
-    # Use LLM to infer intent and generate Cypher if no patterns matched
-    llm_result = await llm_intent_cypher(question)
-    if llm_result:
-        return llm_result
-
-    # Final fallback with simple suggestions
-    return await llm_fallback(question)
-
-
-def generate_geospatial_summary(question: str, data: List[Dict], cypher: str) -> str:
-    """Generate a natural language summary of geospatial query results."""
-    if not data:
-        return "No results found for your query."
-
-    result_count = len(data)
-
-    # IMPORTANT: Check specific patterns before generic ones
-    
-    # FRED economic data (unemployment rates, etc.)
-    if "unemployment_rate" in str(data[0]):
-        item = data[0]
-        state = item.get("state", "Unknown")
-        rate = item.get("unemployment_rate", "Unknown")
-        date = item.get("as_of_date", "Unknown")
-        return f"The current unemployment rate in {state} is {rate}% (as of {date})"
-    
-    # Trend/historical data (start_value, end_value, change)
-    if "start_value" in str(data[0]) and "end_value" in str(data[0]):
-        if result_count == 1:
-            item = data[0]
-            metric = item.get("metric_name", "Rate")
-            start_val = item.get("start_value", 0)
-            end_val = item.get("end_value", 0)
-            change = item.get("change", 0)
-            percent_change = item.get("percent_change", 0)
-            start_date = item.get("start_date", "Unknown")
-            end_date = item.get("end_date", "Unknown")
-            
-            direction = "increased" if change > 0 else "decreased"
-            abs_change = abs(change)
-            abs_percent = abs(percent_change)
-            
-            return f"{metric} has {direction} from {start_val}% ({start_date}) to {end_val}% ({end_date}), a change of {abs_change:.2f} percentage points ({abs_percent}%)"
-        else:
-            trends = []
-            for item in data:
-                metric = item.get("metric_name", "Unknown")
-                change = item.get("change", 0)
-                direction = "↑" if change > 0 else "↓"
-                trends.append(f"{metric}: {direction}{abs(change):.2f}pp")
-            return f"Interest rate trends: {', '.join(trends)}"
-    
-    # Interest rate data (current values)
-    if "current_rate" in str(data[0]):
-        if result_count == 1:
-            item = data[0]
-            rate_type = item.get("rate_type", "Interest rate")
-            rate = item.get("current_rate", "Unknown")
-            date = item.get("as_of_date", "Unknown")
-            return f"The current {rate_type.lower()} is {rate}% (as of {date})"
-        else:
-            rates = []
-            for item in data:
-                rate_type = item.get("rate_type", "Unknown")
-                rate = item.get("current_rate", "Unknown")
-                rates.append(f"{rate_type}: {rate}%")
-            return f"Current interest rates: {', '.join(rates)}"
-    
-    # Portfolio distribution (specific - check this BEFORE generic asset_count)
-    if "platform" in str(data[0]) and "region" in str(data[0]) and "asset_count" in str(data[0]):
-        platform_summary = {}
+    def _format_portfolio_table(self, data: List[Dict]) -> str:
+        """Format portfolio data as a clean table with columns."""
+        if not data:
+            return "No portfolio data found."
+        
+        # Extract columns
+        rows = []
         for item in data:
-            platform = item.get("platform", "Unknown")
-            if platform not in platform_summary:
-                platform_summary[platform] = 0
-            platform_summary[platform] += item.get("asset_count", 1)
-
-        distribution = ", ".join(
-            [f"{p}: {c} assets" for p, c in platform_summary.items()]
-        )
-        return f"Portfolio distribution: {distribution}"
-
-    # Distance analysis
-    if "distance_km" in str(data[0]):
-        if "reference_asset" in str(data[0]):
-            # Distance from reference query
-            ref = data[0].get("reference_asset", "reference point")
-            examples = ", ".join(
-                [
-                    f"{item['asset_name']} ({item['distance_km']}km away)"
-                    for item in data[:3]
-                ]
-            )
-            return f"Found {result_count} assets near {ref}: {examples}"
-        else:
-            # Clustering query
-            pairs = [
-                (item["asset1"], item["asset2"], item["distance_km"])
-                for item in data[:3]
-            ]
-            examples = ", ".join(
-                [f"{a1} and {a2} ({d}km apart)" for a1, a2, d in pairs]
-            )
-            return f"Found {result_count} asset pairs within proximity. Examples: {examples}"
-
-    # Simple count queries (generic - check this AFTER specific patterns)
-    if "total_assets" in str(data[0]):
-        return f"Found {data[0].get('total_assets', result_count)} assets total."
-
-    # Default summary for asset lists
-    asset_names = [item.get("asset_name", "Unknown") for item in data[:5]]
-    if result_count <= 5:
-        return f"Found {result_count} assets: {', '.join(asset_names)}"
-    else:
-        return f"Found {result_count} assets including: {', '.join(asset_names)} and {result_count - 5} more"
-
-
-async def llm_intent_cypher(question: str) -> Optional[Dict[str, Any]]:
-    """Use LLM and langchain-neo4j to infer intent and execute Cypher."""
-
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if not openai_key:
-        return None
-
-    try:
-        from langchain_openai import ChatOpenAI
-        from langchain_neo4j import Neo4jGraph, GraphCypherQAChain
-
-        settings = Settings()
-        graph = Neo4jGraph(
-            url=settings.neo4j_uri,
-            username=settings.neo4j_user,
-            password=settings.neo4j_password,
-            database=settings.neo4j_db,
-        )
-
-        llm = ChatOpenAI(
-            model="gpt-4o-mini",
-            temperature=0,
-            openai_api_key=openai_key,
-        )
-
-        chain = GraphCypherQAChain.from_llm(
-            llm,
-            graph=graph,
-            return_intermediate_steps=True,
-            allow_dangerous_requests=True,
-        )
-
-        result = await asyncio.to_thread(chain.invoke, {"query": question})
-
-        cypher = ""
-        data = []
-        for step in result.get("intermediate_steps", []):
-            if "query" in step:
-                cypher = step["query"]
-            if "context" in step:
-                data = step["context"]
-
-        data = convert_neo4j_types(data)
-
-        return {
-            "answer": result.get("result", "").strip(),
-            "cypher": cypher,
-            "data": data,
-            "question": question,
-            "pattern_matched": False,
-            "llm_generated": True,
-        }
-
-    except Exception as e:
-        return {
-            "answer": f"LLM classification failed: {str(e)}",
-            "cypher": None,
-            "data": [],
-            "question": question,
-            "pattern_matched": False,
-            "llm_generated": False,
-            "error": str(e),
-        }
-
-
-async def llm_fallback(question: str) -> Dict[str, Any]:
-    """LLM-powered fallback for unmatched queries."""
+            if isinstance(item, dict):
+                if 'category' in item and 'count' in item:
+                    rows.append((item['category'], str(item['count'])))
+                elif 'platform' in item or 'investment_type' in item or 'region' in item:
+                    category = item.get('platform', item.get('investment_type', item.get('region', 'Unknown')))
+                    count = item.get('count', item.get('COUNT(a)', 'N/A'))
+                    rows.append((category, str(count)))
+                else:
+                    # Generic two-column format
+                    values = list(item.values())
+                    if len(values) >= 2:
+                        rows.append((str(values[0]), str(values[1])))
+        
+        if not rows:
+            return "No portfolio data found."
+        
+        # Create table with proper columns
+        lines = ["Portfolio Distribution:"]
+        lines.append("=" * 40)
+        lines.append(f"{'Category':<20} {'Count':<10}")
+        lines.append("-" * 40)
+        
+        for category, count in rows:
+            lines.append(f"{category:<20} {count:<10}")
+        
+        return "\n".join(lines)
     
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if not openai_key:
-        return {
-            "answer": (
-                "I couldn't process that question. Try queries like 'assets in California' "
-                "or 'federal funds rate'."
-            ),
-            "cypher": None,
-            "data": [],
-            "question": question,
-            "pattern_matched": False,
-            "llm_fallback": False,
-        }
+    def _format_asset_table(self, data: List[Dict]) -> str:
+        """Format asset data as a clean table with columns."""
+        if not data:
+            return "No assets found."
+        
+        # Extract columns
+        rows = []
+        for item in data:
+            if isinstance(item, dict):
+                # Handle different field name patterns
+                name = item.get('name', item.get('a.name', 'Unknown Asset'))
+                city = item.get('city', item.get('a.city', ''))
+                state = item.get('state', item.get('a.state', ''))
+                building_type = item.get('building_type', item.get('a.building_type', ''))
+                
+                location = ""
+                if city and state:
+                    location = f"{city}, {state}"
+                elif city:
+                    location = city
+                elif state:
+                    location = state
+                
+                rows.append((name, location, building_type))
+        
+        if not rows:
+            return "No assets found."
+        
+        # Create table with proper columns
+        lines = ["Asset Details:"]
+        lines.append("=" * 75)
+        lines.append(f"{'Asset Name':<30} {'Location':<20} {'Type':<20}")
+        lines.append("-" * 75)
+        
+        for name, location, building_type in rows:
+            lines.append(f"{name[:29]:<30} {location[:19]:<20} {building_type[:19]:<20}")
+        
+        return "\n".join(lines)
     
-    try:
-        client = openai.OpenAI(api_key=openai_key)
+    def _format_economic_data(self, data: List[Dict]) -> str:
+        """Format economic data as a clean table with columns."""
+        if not data:
+            return "No economic data found."
         
-        # Prompt to analyze intent and suggest rephrasing
-        prompt = f"""You are helping a user query a knowledge graph containing:
-- Real estate assets (CIM portfolio: 12 assets across US platforms)
-- Economic data (FRED: unemployment rates, interest rates for states)
-- Geographic relationships (assets in cities/states/regions)
-- Vector embeddings for semantic asset similarity
-
-The user asked: "{question}"
-
-This query didn't match any predefined patterns. Analyze the intent and provide ONE of these responses:
-
-1. REPHRASE: If it's similar to a supported query, suggest a rephrasing:
-   "Try asking: [exact rephrase that would work]"
-
-2. DIRECT_ANSWER: If you can provide a specific answer about what data is available:
-   "Here's what I can tell you: [specific answer]"
-
-3. GUIDANCE: If unclear, provide guidance:
-   "I can help with: [list 3-4 specific examples]"
-
-Supported query types:
-- "unemployment in [California/Texas/Georgia]" 
-- "federal funds rate" or "current interest rates"
-- "assets in [state/city]"
-- "[platform] assets" (real estate/infrastructure/credit)
-- "assets within [X]km of [location]"
-- "portfolio distribution"
-- Semantic queries: "[ESG/luxury/sustainable] properties in [state]"
-
-Respond with just the suggested text, no explanations."""
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=150,
-            temperature=0.3
-        )
+        # Extract columns for economic data
+        rows = []
+        for item in data:
+            if isinstance(item, dict):
+                if 'metric' in item:
+                    metric = item['metric']
+                    if 'current_value' in item:
+                        value = f"{item['current_value']}"
+                        date = item.get('current_date', 'N/A')
+                    elif 'change' in item:
+                        start_val = item.get('start_value', 'N/A')
+                        end_val = item.get('end_value', 'N/A')
+                        change = item.get('change', 'N/A')
+                        value = f"{start_val} → {end_val} (Δ{change})"
+                        date = f"{item.get('start_date', '')} to {item.get('end_date', '')}"
+                    else:
+                        value = str(list(item.values())[1]) if len(item) > 1 else "N/A"
+                        date = str(list(item.values())[2]) if len(item) > 2 else "N/A"
+                    
+                    rows.append((metric, value, date))
+                else:
+                    # Generic display - use first few key-value pairs
+                    keys = list(item.keys())
+                    if len(keys) >= 2:
+                        rows.append((str(item[keys[0]]), str(item[keys[1]]), str(item.get(keys[2], ''))))
         
-        suggestion = response.choices[0].message.content.strip()
+        if not rows:
+            return "No economic data found."
         
-        return {
-            "answer": suggestion,
-            "cypher": None,
-            "data": [],
-            "question": question,
-            "pattern_matched": False,
-            "llm_fallback": True,
-            "suggestion_type": "intelligent_guidance"
-        }
+        # Create table with proper columns
+        lines = ["Economic Data:"]
+        lines.append("=" * 80)
+        lines.append(f"{'Metric':<25} {'Value':<25} {'Date':<25}")
+        lines.append("-" * 80)
         
-    except Exception as e:
-        # Fallback to static suggestions if LLM fails
-        suggestions = [
-            "unemployment in California",
-            "federal funds rate", 
-            "assets in California",
-            "real estate assets",
-            "sustainable properties in Texas",
-            "assets within 50km of Los Angeles"
-        ]
+        for metric, value, date in rows:
+            lines.append(f"{metric[:24]:<25} {value[:24]:<25} {date[:24]:<25}")
         
-        return {
-            "answer": f"I couldn't understand that question. Try asking about: {', '.join(suggestions[:4])}",
-            "cypher": None,
-            "data": [],
-            "question": question,
-            "pattern_matched": False,
-            "llm_fallback": False,
-            "error": str(e),
-            "suggestions": suggestions,
-        }
+        return "\n".join(lines)
+
+
+# Factory function for easy instantiation
+async def create_graphrag() -> GraphRAG:
+    """Create a GraphRAG instance with proper initialization."""
+    return GraphRAG()

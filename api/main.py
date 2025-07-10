@@ -3,10 +3,20 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from . import graphrag
+from .graphrag import create_graphrag
 from .config import Settings, get_driver
 
 app = FastAPI()
+
+# Initialize GraphRAG system
+_graphrag_instance = None
+
+async def get_graphrag():
+    """Get or create GraphRAG instance."""
+    global _graphrag_instance
+    if _graphrag_instance is None:
+        _graphrag_instance = await create_graphrag()
+    return _graphrag_instance
 
 
 @app.get("/health")
@@ -26,8 +36,11 @@ class QARequest(BaseModel):
 
 @app.post("/qa")
 async def qa(req: QARequest) -> dict[str, object]:
-    """Answer a natural language question using the graph."""
+    """Answer a natural language question using intelligent GraphRAG."""
     try:
-        return await graphrag.answer_geospatial(req.question)
-    except NotImplementedError as exc:
-        raise HTTPException(status_code=501, detail=str(exc))
+        graphrag = await get_graphrag()
+        result = await graphrag.answer_question(req.question)
+        return result
+        
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
