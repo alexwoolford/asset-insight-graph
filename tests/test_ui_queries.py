@@ -4,10 +4,21 @@ Real integration tests for all UI queries - NO MOCKS!
 These tests hit the actual database and test real system behavior.
 This ensures we catch real bugs like the ESG Texas issue.
 """
+import os
 import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
+
+NEO4J_AVAILABLE = all([
+    os.getenv("NEO4J_URI"),
+    os.getenv("NEO4J_USERNAME") or os.getenv("NEO4J_USER"),
+    os.getenv("NEO4J_PASSWORD"),
+])
+
+pytestmark = pytest.mark.skipif(
+    not NEO4J_AVAILABLE, reason="Neo4j connection settings not provided"
+)
 
 
 @pytest.fixture
