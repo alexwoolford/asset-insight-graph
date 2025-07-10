@@ -65,7 +65,7 @@ def _generate_minimal_description(asset):
 make descriptions
 
 # Or run directly:
-cd etl && python descriptions.py
+cd etl && python property_descriptions.py
 ```
 
 ### **Load Enhanced Data with Vector Search**
@@ -152,7 +152,7 @@ make start-all
 
 ### **Enhanced Data Files**
 - `etl/cim_assets.jsonl` - Original scraped data from CIM website
-- `etl/cim_assets_enhanced.jsonl` - Enhanced with AI-generated descriptions
+- `etl/cim_assets_descriptions.jsonl` - Enhanced with AI-generated descriptions
 - Vector embeddings stored in Neo4j database
 
 ### **Data Source Tracking**

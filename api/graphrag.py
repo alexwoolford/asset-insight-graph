@@ -8,6 +8,52 @@ import openai
 
 from .config import Settings, get_driver
 
+# Add state mapping for abbreviations and case insensitivity
+STATE_MAPPINGS = {
+    # Full names (case insensitive)
+    "california": "California",
+    "texas": "Texas", 
+    "new york": "New York",
+    "georgia": "Georgia",
+    "illinois": "Illinois",
+    "wisconsin": "Wisconsin",
+    "missouri": "Missouri",
+    # Abbreviations
+    "ca": "California",
+    "tx": "Texas",
+    "ny": "New York", 
+    "ga": "Georgia",
+    "il": "Illinois",
+    "wi": "Wisconsin",
+    "mo": "Missouri",
+    # Common typos
+    "californa": "California",
+    "califorina": "California",
+    "texsa": "Texas",
+    "new yourk": "New York",
+}
+
+def normalize_state_name(state_input: str) -> str:
+    """Normalize state name to handle case sensitivity, abbreviations, and typos."""
+    if not state_input:
+        return state_input
+    
+    # Try exact match first (case insensitive)
+    normalized = state_input.lower().strip()
+    if normalized in STATE_MAPPINGS:
+        return STATE_MAPPINGS[normalized]
+    
+    # Try fuzzy matching for common typos
+    for typo, correct in STATE_MAPPINGS.items():
+        if abs(len(typo) - len(normalized)) <= 2:  # Similar length
+            # Simple character difference check
+            diff_count = sum(1 for a, b in zip(typo, normalized) if a != b)
+            if diff_count <= 2:  # Allow 2 character differences
+                return correct
+    
+    # If no match found, return capitalized version
+    return state_input.title()
+
 # Query patterns using Neo4j native geospatial Point types
 # NOTE: Order matters! More specific patterns should come first
 GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
@@ -33,8 +79,8 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
     ),
     # State queries (more specific than city)
     (
-        re.compile(r"assets in (?P<state>.+) state", re.I),
-        """MATCH (a:Asset)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State {name: $state})
+        re.compile(r"assets in (?P<state>.+?)(?:\s+state)?$", re.I),
+        """MATCH (a:Asset)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State {name: $normalized_state})
            RETURN a.name AS asset_name, c.name AS city, 
                   a.building_type AS building_type""",
     ),
@@ -65,7 +111,7 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
         """MATCH (a:Asset)-[:HAS_TYPE]->(bt:BuildingType), 
                  (a)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State)
            WHERE toLower(bt.name) CONTAINS toLower($building_type)
-             AND (toLower(s.name) = toLower($state) OR toLower($state) = 'texas' AND s.name = 'Texas')
+             AND toLower(s.name) = toLower($normalized_state)
            RETURN a.name AS asset_name, c.name AS city, 
                   bt.name AS building_type, s.name AS state""",
     ),
@@ -172,6 +218,98 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
         "VECTOR_SEARCH",
     ),
     
+    # FRED-enhanced business intelligence queries (Updated for timeseries chain structure)
+    (
+        re.compile(r"(?:current|latest)\s+(?:interest\s+)?rates?", re.I),
+        """MATCH (c:Country {name: "United States"})-[:HAS_METRIC]->(mt:MetricType)
+           WHERE mt.category = "Interest Rate"
+           MATCH (mt)-[:TAIL]->(latest:MetricValue)
+           RETURN mt.name AS rate_type, latest.value AS current_rate, latest.date AS as_of_date
+           ORDER BY latest.date DESC, mt.name""",
+    ),
+    (
+        re.compile(r"unemployment\s+(?:in|by)\s+(?:states?|where.*assets?)", re.I),
+        """MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(s:State)
+           MATCH (s)-[:HAS_METRIC]->(mt:MetricType)
+           WHERE mt.category = "Labor" AND mt.name CONTAINS "Unemployment"
+           MATCH (mt)-[:TAIL]->(latest:MetricValue)
+           RETURN s.name AS state, 
+                  latest.value AS current_unemployment_rate,
+                  count(DISTINCT a) AS assets_in_state,
+                  latest.date AS latest_data
+           ORDER BY current_unemployment_rate ASC""",
+    ),
+    (
+        re.compile(r"economic\s+trends?\s+(?:for|in)\s+(?P<state>.+)", re.I),
+        """MATCH (s:State {name: $normalized_state})-[:HAS_METRIC]->(mt:MetricType)-[:HAS_VALUE]->(mv:MetricValue)
+           WHERE mv.date >= date() - duration({months: 6})
+           RETURN mt.name AS metric_name, 
+                  mt.category AS category,
+                  avg(mv.value) AS avg_value,
+                  max(mv.date) AS latest_date,
+                  count(mv) AS data_points
+           ORDER BY mt.category, mt.name""",
+    ),
+        (
+        re.compile(r"(?:interest\s+rate|rate)\s+(?:trends?|sensitivity|analysis)", re.I),
+        """MATCH (c:Country {name: "United States"})-[:HAS_METRIC]->(mt:MetricType)
+           WHERE mt.category = "Interest Rate"
+           MATCH (mt)-[:HEAD]->(first:MetricValue)
+           MATCH (mt)-[:TAIL]->(last:MetricValue)
+           WITH mt.name AS rate_type, 
+                first.value AS start_value,
+                last.value AS end_value,
+                last.value - first.value AS change,
+                first.date AS start_date,
+                last.date AS end_date
+           MATCH (a:Asset)-[:BELONGS_TO]->(p:Platform {name: "Credit"})
+           RETURN rate_type, start_value, end_value, change, start_date, end_date,
+                  count(a) AS potentially_affected_assets
+           ORDER BY ABS(change) DESC""",
+    ),
+    (
+        re.compile(r"assets?\s+(?:by|grouped?\s+by)\s+economic\s+(?:environment|context)", re.I),
+        """MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(s:State)-[:HAS_METRIC]->(mt:MetricType)
+           WHERE mt.category = "Labor"
+           MATCH (mt)-[:HAS_VALUE]->(mv:MetricValue)
+           WHERE mv.date >= date() - duration({months: 1})
+           WITH a, s, avg(mv.value) AS recent_unemployment
+           MATCH (a)-[:BELONGS_TO]->(p:Platform)
+           RETURN s.name AS state,
+                  p.name AS platform,
+                  recent_unemployment,
+                  count(a) AS asset_count
+           ORDER BY recent_unemployment ASC, asset_count DESC""",
+    ),
+    (
+        re.compile(r"(?:national\s+)?housing\s+(?:market|metrics?|indicators?)", re.I),
+        """MATCH (c:Country {name: "United States"})-[:HAS_METRIC]->(mt:MetricType)
+           WHERE mt.category = "Housing"
+           MATCH (mt)-[:HAS_VALUE]->(mv:MetricValue)
+           WHERE mv.date >= date() - duration({months: 6})
+           WITH mt.name AS metric_name,
+                avg(mv.value) AS avg_value,
+                max(mv.date) AS latest_date
+           MATCH (a:Asset)-[:BELONGS_TO]->(p:Platform {name: "Real Estate"})
+           RETURN metric_name, avg_value, latest_date, 
+                  count(a) AS real_estate_assets
+           ORDER BY metric_name""",
+    ),
+    (
+                 re.compile(r"(?:portfolio\s+)?risk\s*(?:analysis|volatility|economic)", re.I),
+         """MATCH (s:State)-[:HAS_METRIC]->(mt:MetricType)-[:HAS_VALUE]->(mv:MetricValue)
+            WHERE mv.date >= date() - duration({months: 12})
+            WITH s.name AS state, 
+                 mt.category AS category,
+                 max(mv.value) - min(mv.value) AS volatility
+            MATCH (a:Asset)-[:LOCATED_IN]->(:City)-[:PART_OF]->(s2:State {name: state})
+            MATCH (a)-[:BELONGS_TO]->(p:Platform)
+            RETURN state, p.name AS platform, category,
+                   avg(volatility) AS avg_economic_volatility,
+                   count(a) AS assets_at_risk
+            ORDER BY avg_economic_volatility DESC""",
+    ),
+    
     # City queries (most general, comes last)
     (
         re.compile(r"assets in (?P<city>.+)", re.I),
@@ -181,6 +319,22 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
     ),
 ]
 
+# Add hybrid query patterns and implementation
+HYBRID_QUERY_PATTERNS = [
+    # Geographic + Semantic patterns (flexible state matching)
+    (
+        re.compile(r"(?:properties|assets)\s+in\s+(?P<state>[^,\s]+(?:\s+[^,\s]+)?)\s+that\s+are\s+(?P<semantic>ESG|sustainable|green|renewable|luxury|premium|modern|tech|innovation)", re.I),
+        "HYBRID_GEOGRAPHIC_SEMANTIC"
+    ),
+    (
+        re.compile(r"(?P<semantic>ESG|sustainable|green|renewable|luxury|premium|modern|tech|innovation)\s+(?:properties|assets)\s+in\s+(?P<state>[^,\s]+(?:\s+[^,\s]+)?)", re.I),
+        "HYBRID_SEMANTIC_GEOGRAPHIC"
+    ),
+    (
+        re.compile(r"show\s+me\s+(?P<semantic>ESG|sustainable|green|renewable|luxury|premium|modern|tech|innovation)\s+(?:properties|assets)\s+in\s+(?P<state>[^,\s]+(?:\s+[^,\s]+)?)", re.I),
+        "HYBRID_SEMANTIC_GEOGRAPHIC"
+    ),
+]
 
 async def perform_vector_search(question: str, limit: int = 5) -> Dict[str, Any]:
     """Perform vector similarity search for semantic queries."""
@@ -217,7 +371,7 @@ async def perform_vector_search(question: str, limit: int = 5) -> Dict[str, Any]
                node.state AS state,
                node.platform AS platform,
                node.building_type AS building_type,
-               node.investment_themes AS investment_themes,
+
                score AS similarity_score,
                node.property_description AS description
         ORDER BY score DESC
@@ -261,15 +415,132 @@ async def perform_vector_search(question: str, limit: int = 5) -> Dict[str, Any]
             "vector_search": False,
         }
 
+async def perform_hybrid_search(question: str, state: str, semantic_term: str, limit: int = 5) -> Dict[str, Any]:
+    """Perform hybrid search: geographic filter + semantic ranking."""
+    
+    # Normalize the state name
+    normalized_state = normalize_state_name(state)
+    
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        return {
+            "answer": "Hybrid search requires OpenAI API key to be configured.",
+            "cypher": None,
+            "data": [],
+            "question": question,
+            "pattern_matched": False,
+            "hybrid_search": False,
+        }
+    
+    try:
+        # Initialize OpenAI client
+        client = openai.OpenAI(api_key=openai_key)
+        
+        # Generate embedding for the semantic term
+        response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=semantic_term.replace("\n", " "),
+            encoding_format="float"
+        )
+        query_embedding = response.data[0].embedding
+        
+        # Hybrid search: First filter by state, then rank by semantic similarity
+        hybrid_cypher = """
+        // Step 1: Get all assets in the specified state with embeddings
+        MATCH (a:Asset)-[:LOCATED_IN]->(c:City)-[:PART_OF]->(s:State {name: $state})
+        WHERE a.description_embedding IS NOT NULL
+        
+        // Step 2: Calculate cosine similarity manually
+        WITH a, c, s,
+             reduce(dot = 0.0, i IN range(0, size(a.description_embedding)-1) | 
+                dot + a.description_embedding[i] * $query_embedding[i]) AS dot_product,
+             sqrt(reduce(norm_a = 0.0, x IN a.description_embedding | norm_a + x * x)) AS norm_a,
+             sqrt(reduce(norm_q = 0.0, x IN $query_embedding | norm_q + x * x)) AS norm_q
+        
+        WITH a, c, s, dot_product / (norm_a * norm_q) AS similarity_score
+        
+        // Step 3: Return results ranked by semantic relevance
+        RETURN a.name AS asset_name,
+               c.name AS city,
+               s.name AS state,
+               a.platform AS platform,
+               a.building_type AS building_type,
+
+               similarity_score,
+               a.property_description AS description
+        ORDER BY similarity_score DESC
+        LIMIT $limit
+        """
+        
+        # Execute hybrid search
+        driver = get_driver()
+        settings = Settings()
+        async with driver.session(database=settings.neo4j_db) as session:
+            result = await session.run(hybrid_cypher, {
+                "state": normalized_state,
+                "query_embedding": query_embedding,
+                "limit": limit
+            })
+            data = await result.data()
+        
+        # Generate summary
+        if data:
+            asset_summaries = []
+            for item in data:
+                score = item['similarity_score']
+                asset_summaries.append(f"{item['asset_name']} (similarity: {score:.3f})")
+            
+            summary = f"Found {len(data)} properties in {normalized_state} ranked by {semantic_term} relevance: " + ", ".join(asset_summaries)
+        else:
+            summary = f"No properties found in {normalized_state} with vector embeddings for semantic ranking."
+        
+        return {
+            "answer": summary,
+            "cypher": hybrid_cypher,
+            "data": data,
+            "question": question,
+            "pattern_matched": True,
+            "hybrid_search": True,
+            "search_type": "Hybrid (Geographic Filter + Semantic Ranking)",
+            "filter_criteria": f"State: {normalized_state} (normalized from '{state}')",
+            "semantic_criteria": f"Similarity to: {semantic_term}"
+        }
+        
+    except Exception as e:
+        return {
+            "answer": f"Error performing hybrid search: {str(e)}",
+            "cypher": None,
+            "data": [],
+            "question": question,
+            "pattern_matched": False,
+            "hybrid_search": False,
+            "error": str(e)
+        }
+
 
 async def answer_geospatial(question: str) -> Dict[str, Any]:
     """Return answer dictionary using geospatial patterns and vector search."""
 
+    # First check for hybrid query patterns
+    for pattern, search_type in HYBRID_QUERY_PATTERNS:
+        match = pattern.search(question)
+        if match:
+            params = match.groupdict()
+            state = params.get('state')
+            semantic = params.get('semantic')
+            
+            if state and semantic:
+                return await perform_hybrid_search(question, state, semantic)
+    
     # Use pattern matching for all queries
     for pattern, cypher in GEOSPATIAL_RULES:
         match = pattern.search(question)
         if match:
             params = match.groupdict()
+            
+            # Normalize state parameter if present
+            if 'state' in params and params['state']:
+                params['normalized_state'] = normalize_state_name(params['state'])
             
             # Check if this is a vector search pattern
             if cypher == "VECTOR_SEARCH":
@@ -295,20 +566,13 @@ async def answer_geospatial(question: str) -> Dict[str, Any]:
 
     # Fallback: suggest what kinds of questions can be answered
     suggestions = [
-        "Assets in California",
-        "Real estate assets",
-        "Infrastructure assets",
-        "Credit assets",
-        "Assets in Texas state",
-        "Assets in the west",
-        "Portfolio distribution",
-        "Commercial buildings",
-        "Nearby assets",
+        "Assets in California (or CA)",
+        "Real estate assets", 
+        "Properties in Texas that are ESG friendly",
+        "Sustainable assets in California",
+        "Luxury properties in New York",
         "Assets within 50km of Los Angeles",
-        "Assets in LA area",
         "How many assets",
-        "Sustainable renewable energy projects",
-        "Luxury urban development",
     ]
 
     return {

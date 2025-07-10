@@ -16,66 +16,57 @@ import tempfile
 from pathlib import Path
 
 def create_workflow_diagram():
-    """Create a LangGraph-style workflow state diagram."""
+    """Create a simplified LangGraph-style workflow state diagram."""
     
     mermaid_diagram = """stateDiagram-v2
     [*] --> __start__
     
     __start__ --> query_analysis
     
-    query_analysis --> vector_search : Semantic similarity detected
-    query_analysis --> pattern_matching : Graph pattern detected
-    query_analysis --> __end__ : Invalid input
+    query_analysis --> hybrid_search : Geographic + Semantic Query
+    query_analysis --> vector_search : Pure Semantic Query
+    query_analysis --> graph_search : Pure Geographic Query
+    query_analysis --> __end__ : Invalid Query
+    
+    hybrid_search --> geographic_filter : Step 1: Filter by Location
+    geographic_filter --> semantic_ranking : Step 2: Rank by Similarity
+    semantic_ranking --> format_results
     
     vector_search --> embedding_generation
     embedding_generation --> similarity_search
     similarity_search --> format_results
     
-    pattern_matching --> predefined_cypher : Pattern match found
-    pattern_matching --> text2cypher : No pattern match
-    pattern_matching --> error_handling : Pattern error
-    
-    error_handling --> format_results : Error handled
-    error_handling --> __end__ : Unrecoverable error
-    
-    predefined_cypher --> format_results
-    predefined_cypher --> text2cypher : Fallback needed
-    
-    text2cypher --> format_results
-    text2cypher --> error_handling : Cypher generation failed
+    graph_search --> pattern_matching
+    pattern_matching --> cypher_execution
+    cypher_execution --> format_results
     
     format_results --> final_answer
-    
     final_answer --> __end__
     
     __end__ --> [*]
     
-    state vector_search {
-        [*] --> embedding_keywords
-        [*] --> sustainability_themes
-        [*] --> similarity_queries
-        [*] --> property_features
+    state hybrid_search {
+        [*] --> texas_filter
+        [*] --> california_filter
+        [*] --> esg_ranking
+        [*] --> luxury_ranking
         
-        embedding_keywords --> [*]
-        sustainability_themes --> [*] 
-        similarity_queries --> [*]
-        property_features --> [*]
+        texas_filter --> [*]
+        california_filter --> [*]
+        esg_ranking --> [*]
+        luxury_ranking --> [*]
     }
     
-    state predefined_cypher {
-        [*] --> assets_in_state
-        [*] --> assets_in_region
-        [*] --> assets_within_distance
-        [*] --> portfolio_distribution
-        [*] --> assets_by_type
-        [*] --> total_assets
+    state graph_search {
+        [*] --> state_queries
+        [*] --> platform_queries
+        [*] --> geospatial_queries
+        [*] --> portfolio_queries
         
-        assets_in_state --> [*]
-        assets_in_region --> [*] 
-        assets_within_distance --> [*]
-        portfolio_distribution --> [*]
-        assets_by_type --> [*]
-        total_assets --> [*]
+        state_queries --> [*]
+        platform_queries --> [*]
+        geospatial_queries --> [*]
+        portfolio_queries --> [*]
     }"""
     
     return mermaid_diagram

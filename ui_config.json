@@ -1,24 +1,32 @@
 {
   "app_title": "Asset Insight Graph",
-  "app_description": "Intelligent Real Estate Portfolio Analysis using Neo4j Knowledge Graphs",
+  "app_description": "Intelligent Real Estate Portfolio Analysis using Neo4j Knowledge Graphs with FRED Economic Intelligence",
   "api_base_url": "http://localhost:8000",
   "example_questions": [
-    "assets in California",
-    "portfolio distribution",
-    "commercial buildings", 
-    "assets within 20km of Los Angeles",
-    "how many assets",
-    "residential properties in Texas",
-    "assets in the west region",
-    "show me all platforms",
-    "assets by building type"
+    "Properties in Texas that are ESG friendly",
+    "Assets within 20km of Los Angeles",
+    "Portfolio distribution by region",
+    "Commercial buildings in California",
+    "How many infrastructure assets",
+    "Sustainable renewable energy projects",
+    "Current interest rates",
+    "Unemployment by state",
+    "Economic trends for California",
+    "Interest rate trends",
+    "Assets by economic environment",
+    "National housing indicators",
+    "Portfolio risk analysis"
   ],
   "features": [
     "Geographic Queries: States, regions, cities",
     "Portfolio Analysis: Platform distribution",
     "Building Types: Commercial, residential", 
     "Geospatial: Distance-based searches",
-    "Business Intelligence: Asset metrics"
+    "Business Intelligence: Asset metrics",
+    "Economic Intelligence: FRED data integration",
+    "Market Context: State-level economic indicators",
+    "Risk Analysis: Interest rate sensitivity",
+    "Performance Attribution: Economic drivers"
   ],
   "workflow_agents": [
     {

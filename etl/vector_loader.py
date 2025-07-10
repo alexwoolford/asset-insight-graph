@@ -115,7 +115,7 @@ class VectorEmbeddingLoader:
             "platform": asset.get("platform"),
             "building_type": asset.get("building_type"),
             "property_description": description,
-            "investment_themes": asset.get("investment_themes", []),
+
             "description_embedding": embedding,
             "img_url": asset.get("img_url"),
             "img_filename": asset.get("img_filename")
@@ -130,7 +130,7 @@ class VectorEmbeddingLoader:
             a.platform = $platform,
             a.building_type = $building_type,
             a.property_description = $property_description,
-            a.investment_themes = $investment_themes,
+
             a.description_embedding = $description_embedding,
             a.img_url = $img_url,
             a.img_filename = $img_filename,
@@ -165,7 +165,7 @@ class VectorEmbeddingLoader:
                 print(f"Error loading asset {asset.get('name', 'Unknown')}: {e}")
                 raise
     
-    async def load_all_assets_with_embeddings(self, enhanced_assets_file: str = "cim_assets_enhanced.jsonl") -> None:
+    async def load_all_assets_with_embeddings(self, descriptions_file: str = "cim_assets_descriptions.jsonl") -> None:
         """Load all enhanced assets with embeddings into Neo4j."""
         
         # Read enhanced assets
@@ -174,7 +174,7 @@ class VectorEmbeddingLoader:
             with open(enhanced_assets_file, "r") as f:
                 assets = [json.loads(line) for line in f]
         except FileNotFoundError:
-            print(f"Error: {enhanced_assets_file} not found. Run property_descriptions.py first.")
+            print(f"Error: {descriptions_file} not found. Run property_descriptions.py first.")
             return
         
         print(f"Loading {len(assets)} assets with vector embeddings...")
@@ -210,7 +210,7 @@ class VectorEmbeddingLoader:
                node.state AS state,
                node.platform AS platform,
                node.building_type AS building_type,
-               node.investment_themes AS investment_themes,
+
                score AS similarity_score
         ORDER BY score DESC
         """
@@ -260,9 +260,7 @@ async def main():
                 print(f"  {i}. {result['asset_name']} ({result['platform']}) - Score: {score:.3f}")
                 print(f"     Location: {result['city']}, {result['state']}")
                 print(f"     Type: {result['building_type']}")
-                if result.get('investment_themes'):
-                    themes = ', '.join(result['investment_themes'][:3])  # Show first 3 themes
-                    print(f"     Themes: {themes}")
+                print(f"     Platform: {result['platform']}")
                 print()
         
     except Exception as e:

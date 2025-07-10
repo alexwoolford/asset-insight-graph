@@ -24,7 +24,7 @@ install: ## Install dependencies in existing conda environment
 clean: ## Remove the conda environment completely
 	conda env remove -n $(CONDA_ENV) -y
 
-load: ## Load CIM asset data with native geospatial Point types
+load-cim: ## Load CIM asset data with native geospatial Point types
 	conda run -n $(CONDA_ENV) python etl/cim_loader.py
 
 verify: ## Verify the knowledge graph was loaded correctly
@@ -37,7 +37,7 @@ run: ## Start the FastAPI server
 	conda run -n $(CONDA_ENV) --no-capture-output uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
 cleanup: ## Clean up Neo4j database for fresh start
-	conda run -n $(CONDA_ENV) python etl/cleanup_database.py
+	conda run -n $(CONDA_ENV) python etl/database_cleanup.py
 
 # Development targets
 dev-deps: ## Install development dependencies
@@ -69,21 +69,21 @@ vectors: ## Generate basic AI descriptions and vector embeddings (requires OPENA
 	@echo "✅ Vector search setup complete!"
 	@echo "🔍 Test with: make test-vectors"
 
-descriptions: ## Generate enhanced property descriptions from CIM Group website
-	@echo "🏢 Generating enhanced property descriptions..."
-	@echo "🌐 Scraping data from CIM Group website..."
-	conda run -n $(CONDA_ENV) python etl/descriptions.py
-	@echo "✅ Enhanced descriptions generated!"
-	@echo "📁 Saved to: etl/cim_assets_enhanced.jsonl"
+descriptions: ## Generate property descriptions for vector search
+	@echo "🏢 Generating property descriptions for vector search..."
+	@echo "📝 Creating comprehensive property descriptions..."
+	conda run -n $(CONDA_ENV) python etl/property_descriptions.py
+	@echo "✅ Property descriptions generated!"
+	@echo "📁 Saved to: etl/cim_assets_descriptions.jsonl"
 
-enhanced-setup: ## Generate enhanced descriptions and vector embeddings (RECOMMENDED)
-	@echo "🧠 Setting up enhanced vector similarity search..."
-	@echo "✅ Using verified information from CIM Group website"
-	@echo "📝 Step 1: Generating enhanced property descriptions..."
+descriptions-setup: ## Generate property descriptions and vector embeddings (RECOMMENDED)
+	@echo "🧠 Setting up vector similarity search with property descriptions..."
+	@echo "✅ Using comprehensive AI-generated property descriptions"
+	@echo "📝 Step 1: Generating property descriptions..."
 	$(MAKE) descriptions
 	@echo "🚀 Step 2: Creating vector embeddings and loading into Neo4j..."
-	conda run -n $(CONDA_ENV) python etl/enhanced_loader.py
-	@echo "✅ Enhanced vector search setup complete!"
+	conda run -n $(CONDA_ENV) python etl/vector_loader.py
+	@echo "✅ Vector search setup complete!"
 	@echo "🔍 Test with: make test-vectors"
 
 test-vectors: ## Test vector similarity search capabilities
@@ -97,13 +97,13 @@ complete-setup: ## Complete setup from scratch with enhanced data (database + ve
 	@echo "🚀 Complete Asset Insight Graph Setup"
 	@echo "====================================="
 	@echo "✅ Using verified CIM Group website data"
-	@echo "📊 Step 1: Loading asset data..."
-	$(MAKE) load
+	@echo "📊 Step 1: Loading CIM asset data..."
+	$(MAKE) load-cim
 	@echo "🔍 Step 2: Verifying knowledge graph..."
 	$(MAKE) verify
-	@echo "🧠 Step 3: Setting up enhanced vector search (if OPENAI_API_KEY is set)..."
+	@echo "🧠 Step 3: Setting up vector search (if OPENAI_API_KEY is set)..."
 	@if [ -n "$$OPENAI_API_KEY" ]; then \
-		$(MAKE) enhanced-setup; \
+		$(MAKE) descriptions-setup; \
 	else \
 		echo "⚠️  OPENAI_API_KEY not set - skipping vector search setup"; \
 		echo "💡 Set OPENAI_API_KEY in .env to enable semantic similarity search"; \
@@ -115,8 +115,8 @@ complete-setup-basic: ## Complete setup with basic synthetic data (for testing o
 	@echo "🚀 Complete Asset Insight Graph Setup (Basic)"
 	@echo "=============================================="
 	@echo "⚠️  WARNING: Uses basic AI-generated descriptions"
-	@echo "📊 Step 1: Loading asset data..."
-	$(MAKE) load
+	@echo "📊 Step 1: Loading CIM asset data..."
+	$(MAKE) load-cim
 	@echo "🔍 Step 2: Verifying knowledge graph..."
 	$(MAKE) verify
 	@echo "🧠 Step 3: Setting up basic vector search (if OPENAI_API_KEY is set)..."
@@ -157,4 +157,43 @@ stop-all: ## Stop all background services
 	@echo "🛑 Stopping all services..."
 	-pkill -f "uvicorn api.main:app"
 	-pkill -f "streamlit run streamlit_app.py"
-	@echo "✅ All services stopped" 
+	@echo "✅ All services stopped"
+
+gds-analysis: ## Run Graph Data Science community detection analysis
+	@echo "🧠 Running GDS community detection and geographic analysis..."
+	@echo "💡 Discover hidden patterns in asset clustering and geographic distribution"
+	conda run -n $(CONDA_ENV) python etl/gds_analysis.py
+	@echo "✅ GDS analysis complete!" 
+
+load-fred: ## Load FRED economic data with timeseries chain structure (requires FRED_API_KEY)
+	@echo "🏦 Loading FRED data with timeseries chain structure..."
+	@echo "📊 Creating HEAD/TAIL links and NEXT chain relationships"
+	@echo "💡 Requires FRED_API_KEY - get free key at: https://fred.stlouisfed.org/docs/api/api_key.html"
+	conda run -n $(CONDA_ENV) python etl/fred_loader.py
+	@echo "✅ FRED timeseries chain structure complete!"
+
+
+
+wipe-database: ## Completely wipe the database (all nodes, relationships, constraints, indexes)
+	@echo "🧹 WARNING: This will completely wipe the database!"
+	conda run -n $(CONDA_ENV) python etl/database_reset.py --force
+
+
+
+fresh-start: ## Complete fresh start: wipe database + load CIM + load FRED chains
+	@echo "🚀 Complete Fresh Start with Timeseries Chains"
+	@echo "=============================================="
+	@echo "⚠️  WARNING: This will wipe the entire database!"
+	@echo "📊 Steps: 1) Wipe database 2) Load CIM assets 3) Load FRED chains"
+	@echo ""
+	@if [ -n "$$FRED_API_KEY" ]; then \
+		$(MAKE) wipe-database; \
+		$(MAKE) load-cim; \
+		$(MAKE) load-fred; \
+		$(MAKE) verify; \
+		echo "✅ Fresh start complete with timeseries chains!"; \
+	else \
+		echo "❌ FRED_API_KEY not set in .env file"; \
+		echo "💡 Get a free API key at: https://fred.stlouisfed.org/docs/api/api_key.html"; \
+		echo "📝 Add to .env: FRED_API_KEY=your_api_key_here"; \
+	fi

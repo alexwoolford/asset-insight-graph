@@ -10,6 +10,7 @@ This module creates rich, descriptive text for each property that captures:
 """
 
 import json
+import os
 from typing import Dict, Any, List
 
 
@@ -242,7 +243,8 @@ def generate_enhanced_dataset() -> List[Dict[str, Any]]:
     """Generate enhanced descriptions for all CIM assets."""
     
     # Read existing assets
-    with open("cim_assets.jsonl", "r") as f:
+    asset_file = "cim_assets.jsonl" if os.path.exists("cim_assets.jsonl") else "etl/cim_assets.jsonl"
+    with open(asset_file, "r") as f:
         assets = [json.loads(line) for line in f]
     
     enhanced_assets = []
@@ -254,8 +256,7 @@ def generate_enhanced_dataset() -> List[Dict[str, Any]]:
         # Generate comprehensive description
         asset["property_description"] = generate_property_description(asset)
         
-        # Add investment themes keywords for better search
-        asset["investment_themes"] = get_investment_themes(asset)
+
         
         enhanced_assets.append(asset)
     
@@ -284,49 +285,7 @@ def infer_building_type(asset: Dict[str, Any]) -> str:
         return "Mixed Use"
 
 
-def get_investment_themes(asset: Dict[str, Any]) -> List[str]:
-    """Generate investment theme keywords for enhanced search."""
-    
-    themes = []
-    platform = asset.get("platform", "")
-    building_type = asset.get("building_type", "")
-    city = asset.get("city", "")
-    state = asset.get("state", "")
-    name = asset.get("name", "")
-    
-    # Platform themes
-    if platform == "Real Estate":
-        themes.extend(["direct real estate", "core", "urban development", "institutional quality"])
-    elif platform == "Infrastructure":
-        themes.extend(["infrastructure", "essential services", "stable income", "contracted revenue"])
-    elif platform == "Credit":
-        themes.extend(["real estate credit", "financing", "secured lending", "income generation"])
-    
-    # Building type themes
-    if "Commercial" in building_type:
-        themes.extend(["office", "corporate headquarters", "business district", "professional services"])
-    elif "Residential" in building_type:
-        themes.extend(["multifamily", "apartments", "urban living", "housing"])
-    elif "Infrastructure" in building_type:
-        themes.extend(["utilities", "essential infrastructure", "regulated assets", "public-private partnership"])
-    elif "Mixed Use" in building_type:
-        themes.extend(["mixed use", "live work play", "urban planning", "community development"])
-    
-    # Market themes
-    if state in ["California", "New York"]:
-        themes.extend(["gateway market", "high barrier to entry", "premium market"])
-    elif state in ["Texas", "Georgia", "Arizona"]:
-        themes.extend(["growth market", "business friendly", "population growth"])
-    
-    # ESG themes
-    if any(word in name.lower() for word in ["solar", "renewable", "carbon", "water", "sustainable"]):
-        themes.extend(["ESG", "sustainability", "environmental", "climate", "green"])
-    
-    # Tech and innovation themes
-    if city in ["Austin", "Los Angeles"]:
-        themes.extend(["technology hub", "innovation", "startups", "tech companies"])
-    
-    return themes
+
 
 
 if __name__ == "__main__":
@@ -334,7 +293,8 @@ if __name__ == "__main__":
     enhanced_assets = generate_enhanced_dataset()
     
     # Save enhanced dataset
-    with open("cim_assets_enhanced.jsonl", "w") as f:
+    output_file = "cim_assets_descriptions.jsonl" if os.getcwd().endswith("etl") else "etl/cim_assets_descriptions.jsonl"
+    with open(output_file, "w") as f:
         for asset in enhanced_assets:
             f.write(json.dumps(asset) + "\n")
     
@@ -345,4 +305,4 @@ if __name__ == "__main__":
     print("="*50)
     print(f"Asset: {enhanced_assets[0]['name']}")
     print(f"Description: {enhanced_assets[0]['property_description']}")
-    print(f"Investment Themes: {', '.join(enhanced_assets[0]['investment_themes'])}") 
+    print(f"Type: {enhanced_assets[0]['building_type']}") 

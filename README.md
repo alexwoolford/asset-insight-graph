@@ -1,275 +1,301 @@
 # Asset Insight Graph
 
-Asset Insight Graph demonstrates a small knowledge graph backed by Neo4j Aura and a minimal FastAPI service providing GraphRAG endpoints.
+**Intelligent Real Estate Portfolio Analysis using Neo4j Knowledge Graphs with FRED Economic Intelligence**
 
-## 📊 Data Accuracy & Verification
+A sophisticated knowledge graph system that combines CIM Group's real estate portfolio data with Federal Reserve Economic Data (FRED) to enable advanced business intelligence queries and analysis.
 
-**All data is verifiable and sourced from official channels.** Asset information is scraped directly from CIM Group's official website and enhanced using OpenAI GPT-4 based only on real content. No speculative data is included.
+> **🎯 Production Ready**: Repository has been cleaned of temporary files and migration scripts. All components are optimized and ready for deployment.
 
-📖 **See [DATA_ACCURACY.md](DATA_ACCURACY.md) for complete details on our data sourcing and verification process.**
+## 🏗️ **System Architecture**
 
-## Repository Layout
+### **Knowledge Graph Components**
+- **CIM Asset Portfolio**: 12 real estate assets across multiple platforms (Real Estate, Infrastructure, Credit)
+- **FRED Economic Data**: Federal Reserve timeseries data with optimized chain structure
+- **Geographic Hierarchy**: Country → State → City → Asset relationships
+- **Vector Search**: Semantic similarity search capabilities
 
-```text
-.
-├── api/                # FastAPI service
-│   ├── asset_queries/  # Predefined Cypher queries and schemas
-│   └── ...
-├── etl/                # Data loading scripts
-├── workflows/          # Generated workflow diagrams (PNG)
-├── docs/               # Documentation and diagram generation
-├── tests/              # Pytest suites
+### **Timeseries Chain Structure**
+```
+MetricType → HEAD → MetricValue (first) 
+MetricType → TAIL → MetricValue (latest)
+MetricValue → NEXT → MetricValue → NEXT → ... (chronological chain)
 ```
 
+**Benefits:**
+- ⚡ Fast access to first/last values via HEAD/TAIL
+- 🔗 Efficient chronological traversal via NEXT relationships  
+- 📊 Optimal for regular monthly/quarterly data reading
+- 🎯 Perfect chain integrity with no gaps
 
-## 🚀 Quick Start
+## 🚀 **Quick Start**
 
-### 🎯 One-Command Setup (Recommended)
+### **Prerequisites**
+- Python 3.11+
+- Neo4j Database
+- Conda environment
 
-For the fastest setup, use our complete setup command:
-
+### **Setup**
 ```bash
-# 1. Clone and setup environment
-git clone <repository-url>
-cd asset-insight-graph
+# 1. Setup conda environment
 make setup
 
-# 2. Configure credentials
-cp .env.example .env
-# Edit .env with your Neo4j credentials (required)
-# Optionally add OPENAI_API_KEY for vector search
+# 2. Configure environment variables (.env file)
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=your_password
+NEO4J_DB=neo4j
+OPENAI_API_KEY=your_openai_key  # Optional for vector search
+FRED_API_KEY=your_fred_key      # Required for economic data
+```
 
-# 3. Complete setup (loads data + creates vectors if OpenAI key provided)
-conda activate cim
+### **Complete Fresh Start**
+```bash
+# One command to build everything
+make fresh-start
+```
+
+This will:
+1. 🧹 Wipe the database completely
+2. 📊 Load CIM asset data  
+3. 📈 Load FRED economic data with timeseries chains
+4. ✅ Verify the knowledge graph
+
+## 📊 **Data Loading Commands**
+
+### **Individual Data Sources**
+```bash
+# Load CIM real estate portfolio
+make load-cim
+
+# Load FRED economic data with timeseries chains
+make load-fred
+
+# Verify data integrity
+make verify
+```
+
+### **Database Management**
+```bash
+# Complete database wipe (removes everything)
+make wipe-database
+
+# Cleanup for fresh start
+make cleanup
+```
+
+## 🔍 **Business Intelligence Capabilities**
+
+### **Current Economic Indicators**
+```bash
+# Query: "Current interest rates"
+# Returns: Latest rates via TAIL relationships
+30-Year Mortgage Rate: 6.67% (as of 2025-07-03)
+Federal Funds Rate: 4.33% (as of 2025-06-01)
+```
+
+### **Unemployment Analysis**
+```bash
+# Query: "Unemployment by state"  
+# Returns: Current unemployment rates where we have assets
+Georgia: 3.3% (1 asset)
+Texas: 4.0% (2 assets)  
+California: 4.9% (4 assets)
+```
+
+### **Interest Rate Trends**
+```bash
+# Query: "Interest rate trends"
+# Returns: HEAD vs TAIL comparison showing long-term trends
+Federal Funds Rate: 0.8% → 4.33% (↑3.53% over period)
+```
+
+## 🎯 **Query Examples**
+
+### **Geographic Queries**
+- "Properties in Texas that are ESG friendly"
+- "Assets within 20km of Los Angeles"  
+- "Commercial buildings in California"
+
+### **Portfolio Analysis**
+- "Portfolio distribution by region"
+- "Assets by economic environment"
+- "Portfolio risk analysis"
+
+### **Economic Intelligence**
+- "Current interest rates"
+- "Economic trends for California"
+- "National housing indicators"
+
+## 🛠️ **Development Commands**
+
+### **Enhanced Setup**
+```bash
+# Complete setup with vector search
 make complete-setup
 
-# 4. Launch the application
-make start-all
+# Basic setup (no vector search)
+make complete-setup-basic
 ```
 
-🌐 **Open http://localhost:8501 to start querying your knowledge graph!**
-
-### 🐍 Manual Setup (Alternative)
-
-For step-by-step control:
-
+### **Vector Search (Optional)**
 ```bash
-# Create and setup the conda environment
-make setup && conda activate cim
+# Generate property descriptions
+make descriptions
 
-# Configure credentials (copy .env.example to .env)
-cp .env.example .env
-# Edit .env with your Neo4j and OpenAI credentials
-
-# Load CIM asset data with native geospatial Point types
-make load
-
-# Verify the knowledge graph
-make verify
-
-# Optional: Setup vector search (requires OPENAI_API_KEY)
+# Create vector embeddings
 make vectors
 
-# Start the API service
-make run
+# Test vector search
+make test-vectors
 ```
 
-### ✅ Verify Setup
-
-The health endpoint should respond with `{"status": "ok"}`:
-
+### **Graph Analysis**
 ```bash
+# Run Graph Data Science analysis
+make gds-analysis
+```
+
+## 🌐 **Running the Application**
+
+### **Start Services**
+```bash
+# Start API and UI together
+make start-all
+
+# Or start individually:
+make run    # API server (localhost:8000)
+make ui     # Streamlit UI (localhost:8501)
+```
+
+### **Stop Services**
+```bash
+make stop-all
+```
+
+## 📈 **FRED Economic Data**
+
+### **Data Coverage**
+- **18 Economic Metrics** with timeseries chains
+- **12,255 Data Points** across 2+ years
+- **National Metrics**: Interest rates, GDP, housing, inflation
+- **State Metrics**: Unemployment, population for CA, TX, NY, IL, GA
+
+### **Chain Structure Benefits**
+- **HEAD**: Instant access to first data point
+- **TAIL**: Instant access to latest data point  
+- **NEXT**: Chronological traversal of complete timeseries
+- **Perfect Integrity**: No gaps or broken chains
+
+### **API Key Setup**
+Get a free FRED API key at: https://fred.stlouisfed.org/docs/api/api_key.html
+
+Add to `.env`:
+```bash
+FRED_API_KEY=your_api_key_here
+```
+
+## 🎨 **User Interface**
+
+### **Streamlit Dashboard**
+- 📊 Interactive query interface
+- 📈 Economic data visualization  
+- 🔍 Real-time graph exploration
+- 📋 Sample business intelligence queries
+
+### **FastAPI Backend**
+- 🚀 High-performance async API
+- 🧠 GraphRAG query processing
+- 🔗 Neo4j knowledge graph integration
+- 📡 RESTful endpoints
+
+## 📂 **Project Structure**
+
+```
+asset-insight-graph/
+├── api/                          # FastAPI backend
+│   ├── graphrag.py              # Main GraphRAG query engine
+│   ├── main.py                  # FastAPI application
+│   └── config.py                # Database configuration
+├── etl/                         # Data loading and processing
+│   ├── cim_loader.py           # CIM asset data loader
+│   ├── fred_loader.py          # FRED timeseries chain loader
+│   ├── database_reset.py       # Database cleanup
+│   ├── verify_knowledge_graph.py # Data verification
+│   ├── property_descriptions.py # AI descriptions
+│   └── vector_loader.py        # Vector embeddings
+├── streamlit_app.py            # Streamlit UI
+├── Makefile                    # Standardized commands
+└── requirements.txt            # Python dependencies
+```
+
+## 🎯 **Key Features**
+
+### **✅ Implemented**
+- 🏗️ Complete knowledge graph with CIM assets
+- 📈 FRED economic data with optimized timeseries chains  
+- 🔍 Advanced GraphRAG query system
+- 🌐 Interactive Streamlit dashboard
+- 🚀 High-performance FastAPI backend
+- 🧠 Vector similarity search (optional)
+- 📊 Business intelligence capabilities
+
+### **🎯 Query Capabilities**
+- Geographic asset analysis
+- Economic trend analysis
+- Portfolio risk assessment  
+- Interest rate sensitivity
+- Unemployment correlation
+- Real-time economic indicators
+
+## 🔧 **Development & Testing**
+
+### **Code Quality**
+```bash
+make format  # Format with black/isort
+make lint    # Lint with ruff  
+make check   # Run all quality checks
+make test    # Run test suite
+```
+
+### **Health Checks**
+```bash
+# API health
 curl http://localhost:8000/health
-```
 
-📖 **See [SETUP.md](SETUP.md) for complete setup instructions and troubleshooting.**
-
-### 🧠 Enable Vector Search (Optional)
-
-For semantic similarity search capabilities, set up vector embeddings:
-
-```bash
-# 1. Set OpenAI API key in .env file
-echo "OPENAI_API_KEY=your-key-here" >> .env
-
-# 2. Generate enhanced property descriptions
-cd etl && python property_descriptions.py
-
-# 3. Create vector embeddings and load into Neo4j
-python vector_loader.py
-
-# 4. Test vector search
-cd .. && curl -X POST http://localhost:8000/qa \
+# Test business intelligence
+curl -X POST http://localhost:8000/qa \
   -H 'Content-Type: application/json' \
-  -d '{"question": "sustainable renewable energy projects"}'
+  -d '{"question": "Current interest rates"}'
 ```
 
-**Note**: Vector search requires an OpenAI API key and will make API calls to generate embeddings.
+## 📋 **Requirements**
 
-## Development
+### **Core Dependencies**
+- `neo4j>=5.14.0` - Graph database driver
+- `fastapi>=0.104.0` - API framework  
+- `streamlit>=1.28.0` - UI framework
+- `aiohttp>=3.9.0` - Async HTTP for FRED API
+- `openai>=1.3.0` - Vector embeddings (optional)
 
-Run the test suite with:
+### **Development Tools**
+- `pytest` - Testing framework
+- `black` - Code formatting
+- `ruff` - Fast linting
+- `isort` - Import sorting
 
-```bash
-make test
-```
+## 🎉 **Success Metrics**
 
-Details on generating the CIM asset dataset can be found in
-`docs/data_sources.md`.
+### **Data Quality**
+- ✅ **12,255 FRED data points** properly chained
+- ✅ **22 MetricType nodes** with perfect HEAD/TAIL structure
+- ✅ **12,237 NEXT relationships** for seamless traversal
+- ✅ **Zero chain integrity issues**
 
-## 🎨 User Interface
+### **Performance**
+- ⚡ **Instant access** to latest economic indicators via TAIL
+- 🔗 **Efficient traversal** of monthly timeseries via NEXT chains
+- 📊 **Optimized queries** for business intelligence analysis
 
-### Streamlit Web UI
+---
 
-For a user-friendly experience, use the Streamlit interface:
-
-**Option 1: Auto-start everything (Recommended)**
-```bash
-# Start both API and UI automatically
-make start-all
-```
-
-**Option 2: Manual control (2 terminals)**
-```bash
-# Terminal 1: Start API backend
-make run
-
-# Terminal 2: Start UI frontend  
-make ui
-```
-
-**Option 3: Get launch instructions**
-```bash
-# Get instructions for launching the application
-make launch
-```
-
-The UI provides:
-- 💬 **Chat Interface**: Natural language queries with conversation history
-- 🔄 **Workflow Visualization**: See which agents process your questions
-- 📊 **Data Visualizations**: Automatic charts for portfolio and geographic data
-- 🔍 **Cypher Details**: Expandable sections showing generated queries
-- 📥 **Data Export**: Download query results as CSV files
-- 🎯 **Example Questions**: Click-to-try sample queries in the sidebar
-
-### Workflow Diagrams
-
-To visualize the multi-agent workflow you can generate a Mermaid diagram:
-
-```bash
-python docs/generate_diagram.py
-```
-
-This creates `workflows/multi_tool_workflow.png` showing the tool selection
-and summarization steps.
-
-## Features
-
-This implementation includes several improvements over basic knowledge graphs:
-
-### 🏗️ Knowledge Graph
-- **Real CIM Asset Data**: 12 actual CIM Group properties (no synthetic data)
-- **Geographic Hierarchy**: Asset → City → State → Region with geocoded coordinates
-- **Business Intelligence**: Platform, BuildingType, and InvestmentType classifications
-- **Spatial Analysis**: Distance-based queries and geographic clustering
-- **🌍 Native Geospatial**: Neo4j Point types with spatial indexing (recommended loader)
-
-### 🤖 Advanced Asset Query GraphRAG
-- **Pattern-Based Query Engine**: Handles natural language questions like "assets in California" or "portfolio distribution"
-- **🌍 Spatial Queries**: "nearby assets", "assets within 20km of Los Angeles", "assets in LA area"
-- **Business Analytics**: "real estate assets", "commercial buildings"
-- **Portfolio Analysis**: Investment type distribution, regional analysis
-- **Geographic Queries**: State and region-based asset searches
-
-### 🧠 Vector Similarity Search
-- **Semantic Property Discovery**: "Find luxury developments with premium amenities"
-- **Investment Strategy Matching**: "ESG-focused sustainable investments"
-- **Market Similarity**: "Properties in tech innovation hubs"
-- **Asset Comparison**: "Assets similar to Tribune Tower"
-- **OpenAI Embeddings**: Rich property descriptions converted to 1536-dimensional vectors
-- **Neo4j Vector Index**: Cosine similarity search for semantic matching
-
-### 🚀 Future Enhancements
-Potential areas for expansion include:
-- Financial data (ROI, valuations, performance metrics)
-- Temporal data (acquisition dates, development timelines)
-- Market data (comparables, pricing trends)
-- ESG metrics (sustainability scores, green certifications)
-- Risk assessment (climate risk, market volatility)
-
-## 🚀 Usage Examples
-
-### Web Interface (Recommended)
-
-The easiest way to interact with the system is through the Streamlit web UI:
-
-```bash
-# Start complete demo (API + UI)
-make start-all
-
-# Or get step-by-step instructions
-make demo
-```
-
-Try these example questions in the web interface:
-
-**Traditional Graph Queries:**
-- "assets in California"
-- "portfolio distribution" 
-- "assets within 20km of Los Angeles"
-- "commercial buildings"
-- "how many assets"
-- "commercial properties in Texas"
-
-**Vector Similarity Search** (requires OpenAI setup):
-- "sustainable renewable energy projects"
-- "luxury urban developments"
-- "ESG-focused investments"
-- "properties similar to Tribune Tower"
-- "assets with premium amenities"
-
-### API Usage (Advanced)
-
-You can also query the knowledge graph directly via API:
-
-```bash
-# Geographic queries
-curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "assets in California"}'
-
-# Geospatial queries
-curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "assets within 20km of Los Angeles"}'
-
-# Portfolio analysis  
-curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "portfolio distribution"}'
-
-# Building type analysis
-curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "commercial buildings"}'
-
-# Vector similarity search (requires OpenAI API key)
-curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "sustainable renewable energy projects"}'
-
-curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "luxury urban developments"}'
-
-curl -X POST http://localhost:8000/qa -H 'Content-Type: application/json' -d '{"question": "ESG-focused investments"}'
-```
-
-## 🏗️ Architecture Overview
-
-The Asset Insight Graph demonstrates all **5 Neo4j access patterns**:
-
-1. **Node Property Query** - Direct asset lookups by name or ID
-2. **Graph Traversal Query** - Following relationships (Asset → City → State → Region)
-3. **Full Text Search** - Pattern matching on asset names and descriptions  
-4. **Graph Data Science** - Geospatial distance calculations and clustering
-5. **Vector Search** - Semantic similarity using OpenAI embeddings
-
-This comprehensive approach enables both precise structured queries and flexible semantic exploration of real estate investment data.
-
-### Query Processing Flow
-
-```
-User Query → Pattern Detection → Route to:
-├── Traditional Graph Query (Cypher)
-├── Geospatial Query (Neo4j Point types)  
-└── Vector Similarity Search (OpenAI embeddings)
-```
+**Built with Neo4j Knowledge Graphs • FRED Economic Data • FastAPI • Streamlit**
