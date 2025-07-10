@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Dict, List
+import asyncio
+from typing import Any, Dict, List, Optional
 
 import openai
 import neo4j.time
@@ -645,7 +646,12 @@ async def answer_geospatial(question: str) -> Dict[str, Any]:
                 "geospatial_enabled": True,
             }
 
-    # LLM fallback for unmatched queries
+    # Use LLM to infer intent and generate Cypher if no patterns matched
+    llm_result = await llm_intent_cypher(question)
+    if llm_result:
+        return llm_result
+
+    # Final fallback with simple suggestions
     return await llm_fallback(question)
 
 
@@ -757,13 +763,81 @@ def generate_geospatial_summary(question: str, data: List[Dict], cypher: str) ->
         return f"Found {result_count} assets including: {', '.join(asset_names)} and {result_count - 5} more"
 
 
+async def llm_intent_cypher(question: str) -> Optional[Dict[str, Any]]:
+    """Use LLM and langchain-neo4j to infer intent and execute Cypher."""
+
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        return None
+
+    try:
+        from langchain_openai import ChatOpenAI
+        from langchain_neo4j import Neo4jGraph, GraphCypherQAChain
+
+        settings = Settings()
+        graph = Neo4jGraph(
+            url=settings.neo4j_uri,
+            username=settings.neo4j_user,
+            password=settings.neo4j_password,
+            database=settings.neo4j_db,
+        )
+
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,
+            openai_api_key=openai_key,
+        )
+
+        chain = GraphCypherQAChain.from_llm(
+            llm,
+            graph=graph,
+            return_intermediate_steps=True,
+            allow_dangerous_requests=True,
+        )
+
+        result = await asyncio.to_thread(chain.invoke, {"query": question})
+
+        cypher = ""
+        data = []
+        for step in result.get("intermediate_steps", []):
+            if "query" in step:
+                cypher = step["query"]
+            if "context" in step:
+                data = step["context"]
+
+        data = convert_neo4j_types(data)
+
+        return {
+            "answer": result.get("result", "").strip(),
+            "cypher": cypher,
+            "data": data,
+            "question": question,
+            "pattern_matched": False,
+            "llm_generated": True,
+        }
+
+    except Exception as e:
+        return {
+            "answer": f"LLM classification failed: {str(e)}",
+            "cypher": None,
+            "data": [],
+            "question": question,
+            "pattern_matched": False,
+            "llm_generated": False,
+            "error": str(e),
+        }
+
+
 async def llm_fallback(question: str) -> Dict[str, Any]:
     """LLM-powered fallback for unmatched queries."""
     
     openai_key = os.getenv("OPENAI_API_KEY")
     if not openai_key:
         return {
-            "answer": "I couldn't understand that question. Try asking about assets, unemployment rates, or interest rates.",
+            "answer": (
+                "I couldn't process that question. Try queries like 'assets in California' "
+                "or 'federal funds rate'."
+            ),
             "cypher": None,
             "data": [],
             "question": question,
