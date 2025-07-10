@@ -3,6 +3,18 @@ Real integration test for health endpoint - NO MOCKS!
 """
 from fastapi.testclient import TestClient
 from api.main import app
+import os
+import pytest
+
+NEO4J_AVAILABLE = all([
+    os.getenv("NEO4J_URI"),
+    os.getenv("NEO4J_USERNAME") or os.getenv("NEO4J_USER"),
+    os.getenv("NEO4J_PASSWORD"),
+])
+
+pytestmark = pytest.mark.skipif(
+    not NEO4J_AVAILABLE, reason="Neo4j connection settings not provided"
+)
 
 def test_health_endpoint():
     """Test health endpoint with real database connection"""
