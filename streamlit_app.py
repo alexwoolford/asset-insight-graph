@@ -42,12 +42,14 @@ class AssetInsightGraphUI:
     def __init__(self):
         self.api_base_url = "http://localhost:8000"
         self.example_questions = [
-            "Properties in Texas that are ESG friendly",
-            "Assets within 20km of Los Angeles",
             "Portfolio distribution by region",
-            "Commercial buildings in California",
+            "Properties in Texas that are ESG friendly",
+            "Assets within 100km of Los Angeles",
             "How many infrastructure assets",
             "Sustainable renewable energy projects",
+            "Mixed use properties in California",
+            "Assets in California",
+            "Real estate assets",
         ]
 
     def check_api_health(self) -> bool:

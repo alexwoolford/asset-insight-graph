@@ -111,20 +111,25 @@ Federal Funds Rate: 0.8% → 4.33% (↑3.53% over period)
 
 ## 🎯 **Query Examples**
 
-### **Geographic Queries**
-- "Properties in Texas that are ESG friendly"
-- "Assets within 20km of Los Angeles"  
-- "Commercial buildings in California"
-
-### **Portfolio Analysis**
+### **Portfolio Intelligence**
 - "Portfolio distribution by region"
-- "Assets by economic environment"
-- "Portfolio risk analysis"
+- "How many infrastructure assets"
+- "Real estate assets"
 
-### **Economic Intelligence**
-- "Current interest rates"
-- "Economic trends for California"
-- "National housing indicators"
+### **Geographic Analysis**
+- "Assets within 100km of Los Angeles"
+- "Assets in California"
+- "Nearby assets"
+
+### **ESG & Sustainability**
+- "Properties in Texas that are ESG friendly"
+- "Sustainable renewable energy projects"
+- "Properties similar to The Independent"
+
+### **Asset Classification**
+- "Mixed use properties in California"
+- "Commercial buildings in Texas"
+- "Infrastructure assets"
 
 ## 🛠️ **Development Commands**
 

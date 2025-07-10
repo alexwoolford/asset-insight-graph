@@ -165,13 +165,13 @@ class VectorEmbeddingLoader:
                 print(f"Error loading asset {asset.get('name', 'Unknown')}: {e}")
                 raise
     
-    async def load_all_assets_with_embeddings(self, descriptions_file: str = "cim_assets_descriptions.jsonl") -> None:
+    async def load_all_assets_with_embeddings(self, descriptions_file: str = "etl/cim_assets_descriptions.jsonl") -> None:
         """Load all enhanced assets with embeddings into Neo4j."""
         
         # Read enhanced assets
         assets = []
         try:
-            with open(enhanced_assets_file, "r") as f:
+            with open(descriptions_file, "r") as f:
                 assets = [json.loads(line) for line in f]
         except FileNotFoundError:
             print(f"Error: {descriptions_file} not found. Run property_descriptions.py first.")

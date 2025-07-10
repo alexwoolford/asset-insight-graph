@@ -58,13 +58,10 @@ check: ## Run all code quality checks
 ui: ## Start the Streamlit UI interface
 	conda run -n $(CONDA_ENV) --no-capture-output streamlit run streamlit_app.py
 
-vectors: ## Generate basic AI descriptions and vector embeddings (requires OPENAI_API_KEY)
-	@echo "🧠 Setting up basic vector similarity search..."
-	@echo "💡 Note: Uses generic AI-generated descriptions"
-	@echo "💡 Use 'make enhanced-setup' for web-scraped descriptions instead"
-	@echo "📝 Step 1: Generating basic property descriptions..."
-	conda run -n $(CONDA_ENV) python etl/property_descriptions.py
-	@echo "🚀 Step 2: Creating vector embeddings and loading into Neo4j..."
+vectors: ## Generate vector embeddings from property descriptions (requires OPENAI_API_KEY)
+	@echo "🧠 Setting up vector similarity search..."
+	@echo "💡 Note: Uses comprehensive AI-generated property descriptions"
+	@echo "🚀 Creating vector embeddings and loading into Neo4j..."
 	conda run -n $(CONDA_ENV) python etl/vector_loader.py
 	@echo "✅ Vector search setup complete!"
 	@echo "🔍 Test with: make test-vectors"

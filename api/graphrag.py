@@ -218,14 +218,12 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
         "VECTOR_SEARCH",
     ),
     
-    # FRED-enhanced business intelligence queries (Updated for timeseries chain structure)
+    # FRED-enhanced business intelligence queries (Fixed for actual data structure)
     (
         re.compile(r"(?:current|latest)\s+(?:interest\s+)?rates?", re.I),
-        """MATCH (c:Country {name: "United States"})-[:HAS_METRIC]->(mt:MetricType)
-           WHERE mt.category = "Interest Rate"
-           MATCH (mt)-[:TAIL]->(latest:MetricValue)
+        """MATCH (mt:MetricType {category: "Interest Rate"})-[:TAIL]->(latest:MetricValue)
            RETURN mt.name AS rate_type, latest.value AS current_rate, latest.date AS as_of_date
-           ORDER BY latest.date DESC, mt.name""",
+           ORDER BY mt.name""",
     ),
     (
         re.compile(r"unemployment\s+(?:in|by)\s+(?:states?|where.*assets?)", re.I),
@@ -250,21 +248,16 @@ GEOSPATIAL_RULES: List[tuple[re.Pattern[str], str]] = [
                   count(mv) AS data_points
            ORDER BY mt.category, mt.name""",
     ),
-        (
-        re.compile(r"(?:interest\s+rate|rate)\s+(?:trends?|sensitivity|analysis)", re.I),
-        """MATCH (c:Country {name: "United States"})-[:HAS_METRIC]->(mt:MetricType)
-           WHERE mt.category = "Interest Rate"
-           MATCH (mt)-[:HEAD]->(first:MetricValue)
+    (
+        re.compile(r"(?:interest\s+rate|rate)\s+(?:trends?|changes?|analysis)", re.I),
+        """MATCH (mt:MetricType {category: "Interest Rate"})-[:HEAD]->(first:MetricValue)
            MATCH (mt)-[:TAIL]->(last:MetricValue)
-           WITH mt.name AS rate_type, 
-                first.value AS start_value,
-                last.value AS end_value,
-                last.value - first.value AS change,
-                first.date AS start_date,
-                last.date AS end_date
-           MATCH (a:Asset)-[:BELONGS_TO]->(p:Platform {name: "Credit"})
-           RETURN rate_type, start_value, end_value, change, start_date, end_date,
-                  count(a) AS potentially_affected_assets
+           RETURN mt.name AS rate_type, 
+                  first.value AS start_value,
+                  last.value AS end_value,
+                  last.value - first.value AS change,
+                  first.date AS start_date,
+                  last.date AS end_date
            ORDER BY ABS(change) DESC""",
     ),
     (
@@ -593,10 +586,23 @@ def generate_geospatial_summary(question: str, data: List[Dict], cypher: str) ->
 
     result_count = len(data)
 
-    # Customize response based on query type
-    if "asset_count" in str(data[0]) or "total_assets" in str(data[0]):
-        return f"Found {data[0].get('total_assets', data[0].get('asset_count', result_count))} assets total."
+    # IMPORTANT: Check specific patterns before generic ones
+    
+    # Portfolio distribution (specific - check this BEFORE generic asset_count)
+    if "platform" in str(data[0]) and "region" in str(data[0]) and "asset_count" in str(data[0]):
+        platform_summary = {}
+        for item in data:
+            platform = item.get("platform", "Unknown")
+            if platform not in platform_summary:
+                platform_summary[platform] = 0
+            platform_summary[platform] += item.get("asset_count", 1)
 
+        distribution = ", ".join(
+            [f"{p}: {c} assets" for p, c in platform_summary.items()]
+        )
+        return f"Portfolio distribution: {distribution}"
+
+    # Distance analysis
     if "distance_km" in str(data[0]):
         if "reference_asset" in str(data[0]):
             # Distance from reference query
@@ -619,19 +625,9 @@ def generate_geospatial_summary(question: str, data: List[Dict], cypher: str) ->
             )
             return f"Found {result_count} asset pairs within proximity. Examples: {examples}"
 
-    if "platform" in str(data[0]) and "region" in str(data[0]):
-        summary = "Portfolio distribution: "
-        platform_summary = {}
-        for item in data:
-            platform = item.get("platform", "Unknown")
-            if platform not in platform_summary:
-                platform_summary[platform] = 0
-            platform_summary[platform] += item.get("asset_count", 1)
-
-        distribution = ", ".join(
-            [f"{p}: {c} assets" for p, c in platform_summary.items()]
-        )
-        return f"{summary}{distribution}"
+    # Simple count queries (generic - check this AFTER specific patterns)
+    if "total_assets" in str(data[0]):
+        return f"Found {data[0].get('total_assets', result_count)} assets total."
 
     # Default summary for asset lists
     asset_names = [item.get("asset_name", "Unknown") for item in data[:5]]
